@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: tnc-postgres
+    environment:
+      POSTGRES_USER: tnc
+      POSTGRES_PASSWORD: tnc
+      POSTGRES_DB: tnc
+    ports:
+      - "5432:5432"
+    volumes:
+      - tnc-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tnc"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  tnc-pgdata:

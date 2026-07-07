@@ -1,0 +1,10 @@
+# Build artifacts
+*.exe
+/tnc-server
+/devclient
+
+# Local config with secrets
+.env
+
+# Logs
+*.log

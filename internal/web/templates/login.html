@@ -1,0 +1,29 @@
+{{define "login.html"}}<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Вход — TNC-server</title>
+  <style>
+    body { font-family: system-ui, sans-serif; background: #2d3748; display: flex; min-height: 100vh; margin: 0; align-items: center; justify-content: center; }
+    .box { background: #fff; padding: 32px; border-radius: 8px; width: 320px; box-shadow: 0 10px 30px rgba(0,0,0,.3); }
+    h1 { margin: 0 0 20px; font-size: 1.3rem; text-align: center; }
+    label { display: block; margin: 12px 0 4px; font-size: .85rem; color: #4a5568; }
+    input { width: 100%; padding: 8px; box-sizing: border-box; border: 1px solid #cbd5e0; border-radius: 4px; }
+    button { width: 100%; margin-top: 20px; padding: 10px; background: #3182ce; color: #fff; border: 0; border-radius: 4px; font-size: 1rem; cursor: pointer; }
+    .err { background: #fed7d7; color: #742a2a; padding: 8px 12px; border-radius: 4px; font-size: .9rem; margin-bottom: 12px; }
+  </style>
+</head>
+<body>
+  <form class="box" method="post" action="/login">
+    <h1>TNC-server</h1>
+    {{if .Error}}<div class="err">{{.Error}}</div>{{end}}
+    <label>Имя пользователя</label>
+    <input name="username" autofocus autocomplete="username">
+    <label>Пароль</label>
+    <input name="password" type="password" autocomplete="current-password">
+    <button type="submit">Войти</button>
+  </form>
+</body>
+</html>
+{{end}}
