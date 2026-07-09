@@ -23,11 +23,11 @@ func main() {
 
 	for {
 		fmt.Println("\n=== TCP Client ===")
-		fmt.Print("Enter server address (default: localhost:9000): ")
+		fmt.Print("Enter server address (default: 193.109.78.66:9000): ")
 		addrInput, _ := reader.ReadString('\n')
 		addrInput = strings.TrimSpace(addrInput)
 		if addrInput == "" {
-			addrInput = "localhost:9000"
+			addrInput = "193.109.78.66:9000"
 		}
 
 		fmt.Print("Enter device ID: ")

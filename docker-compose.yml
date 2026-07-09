@@ -19,6 +19,7 @@ services:
 
   server:
     build: .
+    # image: ghcr.io/andreufa/tnc-server:1.0
     container_name: tnc-server
     # Пробрасываем порты на хост
     ports:

@@ -54,7 +54,7 @@ func Load() (*Config, error) {
 		TCPAddr:            getenv("TCP_ADDR", ":9000"),
 		SessionSecret:      getenv("SESSION_SECRET", ""),
 		BootstrapAdminUser: getenv("BOOTSTRAP_ADMIN_USER", "admin"),
-		BootstrapAdminPass: getenv("BOOTSTRAP_ADMIN_PASSWORD", "admin"),
+		BootstrapAdminPass: getenv("BOOTSTRAP_ADMIN_PASSWORD", "admin_rover"),
 	}
 
 	if cfg.SessionSecret == "" {
