@@ -1,0 +1,9 @@
+
+.git
+.idea
+*.md
+Dockerfile
+.dockerignore
+.env
+tmp/
+vendor/

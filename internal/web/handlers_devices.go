@@ -28,7 +28,15 @@ func (s *Server) handleDeviceAdd(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/?flash=ID+и+пароль+обязательны", http.StatusSeeOther)
 		return
 	}
-	if err := s.devices.Add(r.Context(), id, password, inService); err != nil {
+
+	// Получаем текущего пользователя из контекста
+	user := userFrom(r.Context())
+	if user == nil {
+		http.Redirect(w, r, "/?flash=Не+авторизован", http.StatusSeeOther)
+		return
+	}
+
+	if err := s.devices.Add(r.Context(), id, password, inService, user.ID); err != nil {
 		http.Redirect(w, r, "/?flash=Не+удалось+добавить+(возможно+ID+занят)", http.StatusSeeOther)
 		return
 	}
@@ -37,7 +45,14 @@ func (s *Server) handleDeviceAdd(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleDeviceDelete(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if err := s.devices.SoftDelete(r.Context(), id); err != nil {
+
+	user := userFrom(r.Context())
+	if user == nil {
+		http.Redirect(w, r, "/?flash=Не+авторизован", http.StatusSeeOther)
+		return
+	}
+
+	if err := s.devices.SoftDelete(r.Context(), id, user.ID); err != nil {
 		s.deviceActionResult(w, r, err)
 		return
 	}
@@ -47,7 +62,14 @@ func (s *Server) handleDeviceDelete(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDeviceService(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	inService := r.FormValue("in_service") == "true"
-	if err := s.devices.SetInService(r.Context(), id, inService); err != nil {
+
+	user := userFrom(r.Context())
+	if user == nil {
+		http.Redirect(w, r, "/?flash=Не+авторизован", http.StatusSeeOther)
+		return
+	}
+
+	if err := s.devices.SetInService(r.Context(), id, inService, user.ID); err != nil {
 		s.deviceActionResult(w, r, err)
 		return
 	}
@@ -61,7 +83,14 @@ func (s *Server) handleDevicePassword(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/?flash=Пароль+не+может+быть+пустым", http.StatusSeeOther)
 		return
 	}
-	if err := s.devices.SetPassword(r.Context(), id, newPass); err != nil {
+
+	user := userFrom(r.Context())
+	if user == nil {
+		http.Redirect(w, r, "/?flash=Не+авторизован", http.StatusSeeOther)
+		return
+	}
+
+	if err := s.devices.SetPassword(r.Context(), id, newPass, user.ID); err != nil {
 		s.deviceActionResult(w, r, err)
 		return
 	}
@@ -75,7 +104,14 @@ func (s *Server) handleDeviceRename(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/?flash=Новый+ID+обязателен", http.StatusSeeOther)
 		return
 	}
-	if err := s.devices.Rename(r.Context(), id, newID); err != nil {
+
+	user := userFrom(r.Context())
+	if user == nil {
+		http.Redirect(w, r, "/?flash=Не+авторизован", http.StatusSeeOther)
+		return
+	}
+
+	if err := s.devices.Rename(r.Context(), id, newID, user.ID); err != nil {
 		s.deviceActionResult(w, r, err)
 		return
 	}

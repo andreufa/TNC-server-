@@ -1,6 +1,9 @@
 package hub
 
-import "sync/atomic"
+import (
+	"log"
+	"sync/atomic"
+)
 
 // Subscriber receives broadcast messages. Its C channel is buffered; if it
 // fills up (slow consumer), further messages for that subscriber are dropped
@@ -88,6 +91,7 @@ func (h *Hub) Unsubscribe(s *Subscriber) {
 // Broadcast sends data to all subscribers except the one identified by
 // senderID. Pass 0 to deliver to everyone.
 func (h *Hub) Broadcast(data []byte, senderID uint64) {
+	log.Printf("hub: broadcasting from sender %d", senderID)
 	select {
 	case h.broadcast <- message{data: data, sender: senderID}:
 	case <-h.quit:

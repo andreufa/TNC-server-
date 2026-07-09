@@ -19,6 +19,24 @@ import (
 )
 
 func main() {
+	// // --- ОТЛАДКА: Проверяем, что видит программа ---
+	// cwd, _ := filepath.Abs(".")
+	// log.Printf("[DEBUG] Working directory: %s", cwd)
+
+	// checkFile := func(name string) {
+	// 	_, err := os.Stat(name)
+	// 	if err == nil {
+	// 		log.Printf("[DEBUG] ✅ File found: %s", name)
+	// 		data, _ := os.ReadFile(name)
+	// 		log.Printf("[DEBUG] Content of %s:\n%s", name, string(data))
+	// 	} else {
+	// 		log.Printf("[DEBUG] ❌ File NOT found: %s (error: %v)", name, err)
+	// 	}
+	// }
+
+	// checkFile(".env.local")
+	// checkFile(".env")
+	// // -----------------------------------------------
 	if err := run(); err != nil {
 		log.Fatalf("fatal: %v", err)
 	}
@@ -33,7 +51,7 @@ func run() error {
 	ctx := context.Background()
 
 	// --- database ---
-	pool, err := db.Connect(ctx, cfg.DatabaseURL)
+	pool, err := db.Connect(ctx, cfg.DatabaseURL())
 	if err != nil {
 		return err
 	}

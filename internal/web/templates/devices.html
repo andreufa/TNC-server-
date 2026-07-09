@@ -30,7 +30,7 @@
     <tr>
       <td><strong>{{.ID}}</strong></td>
       <td>
-        {{if .InService}}<span class="badge on">В обслуживании</span>
+        {{if .InService}}<span class="badge on">Эксплуатация</span>
         {{else}}<span class="badge off">Отключено</span>{{end}}
       </td>
       <td>{{.RegisteredAt.Format "2006-01-02 15:04"}}</td>
@@ -40,12 +40,12 @@
           {{if .InService}}
           <form class="inline" method="post" action="/devices/{{.ID}}/service">
             <input type="hidden" name="in_service" value="false">
-            <button type="submit">Вывести из обслуживания</button>
+            <button type="submit">Деактивировать</button>
           </form>
           {{else}}
           <form class="inline" method="post" action="/devices/{{.ID}}/service">
             <input type="hidden" name="in_service" value="true">
-            <button type="submit">Ввести в обслуживание</button>
+            <button type="submit">Активировать</button>
           </form>
           {{end}}
 

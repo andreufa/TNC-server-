@@ -14,7 +14,6 @@ const (
 	RolePrivileged Role = "privileged" // full device management + user creation
 )
 
-// Valid reports whether r is a recognised role.
 func (r Role) Valid() bool {
 	return r == RoleUser || r == RolePrivileged
 }
@@ -25,6 +24,8 @@ type Device struct {
 	RegisteredAt time.Time
 	DeletedAt    *time.Time
 	InService    bool
+	UpdatedBy    *uuid.UUID
+	UpdatedAt    time.Time
 }
 
 // User is a web-form account.
