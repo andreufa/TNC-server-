@@ -1,51 +1,168 @@
-{{define "top"}}<!DOCTYPE html>
+{{define "top"}}
+<!DOCTYPE html>
 <html lang="ru">
+
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>TNC-server</title>
   <style>
-    body { font-family: system-ui, sans-serif; margin: 0; background: #f5f6f8; color: #1c1e21; }
-    header { background: #2d3748; color: #fff; padding: 12px 20px; display: flex; align-items: center; gap: 20px; }
-    header a { color: #cbd5e0; text-decoration: none; }
-    header a:hover { color: #fff; }
-    header .spacer { flex: 1; }
-    main { max-width: 900px; margin: 24px auto; padding: 0 16px; }
-    h1 { font-size: 1.4rem; }
-    table { width: 100%; border-collapse: collapse; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.1); }
-    th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid #e2e8f0; }
-    th { background: #edf2f7; font-size: .85rem; text-transform: uppercase; letter-spacing: .03em; }
-    .badge { padding: 2px 8px; border-radius: 10px; font-size: .8rem; font-weight: 600; }
-    .badge.on { background: #c6f6d5; color: #22543d; }
-    .badge.off { background: #fed7d7; color: #742a2a; }
-    form.inline { display: inline; }
-    input, select, button { font-size: .9rem; padding: 6px 8px; }
-    button { cursor: pointer; border: 1px solid #cbd5e0; background: #fff; border-radius: 4px; }
-    button.primary { background: #3182ce; color: #fff; border-color: #3182ce; }
-    button.danger { background: #e53e3e; color: #fff; border-color: #e53e3e; }
-    .card { background: #fff; padding: 16px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,.1); border-radius: 6px; }
-    .flash { background: #feebc8; color: #7b341e; padding: 10px 14px; border-radius: 6px; margin-bottom: 16px; }
-    .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-    label.chk { display: inline-flex; align-items: center; gap: 4px; }
+    body {
+      font-family: system-ui, sans-serif;
+      margin: 0;
+      background: #f5f6f8;
+      color: #1c1e21;
+    }
+
+    header {
+      background: #2d3748;
+      color: #fff;
+      padding: 12px 20px;
+      display: flex;
+      align-items: center;
+      gap: 20px;
+    }
+
+    header a {
+      color: #cbd5e0;
+      text-decoration: none;
+    }
+
+    header a:hover {
+      color: #fff;
+    }
+
+    header .spacer {
+      flex: 1;
+    }
+
+    main {
+      max-width: 900px;
+      margin: 24px auto;
+      padding: 0 16px;
+    }
+
+    h1 {
+      font-size: 1.4rem;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: #fff;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, .1);
+    }
+
+    th,
+    td {
+      padding: 10px 12px;
+      text-align: left;
+      border-bottom: 1px solid #e2e8f0;
+    }
+
+    th {
+      background: #edf2f7;
+      font-size: .85rem;
+      text-transform: uppercase;
+      letter-spacing: .03em;
+    }
+
+    .badge {
+      padding: 2px 8px;
+      border-radius: 10px;
+      font-size: .8rem;
+      font-weight: 600;
+    }
+
+    .badge.on {
+      background: #c6f6d5;
+      color: #22543d;
+    }
+
+    .badge.off {
+      background: #fed7d7;
+      color: #742a2a;
+    }
+
+    form.inline {
+      display: inline;
+    }
+
+    input,
+    select,
+    button {
+      font-size: .9rem;
+      padding: 6px 8px;
+    }
+
+    button {
+      cursor: pointer;
+      border: 1px solid #cbd5e0;
+      background: #fff;
+      border-radius: 4px;
+    }
+
+    button.primary {
+      background: #3182ce;
+      color: #fff;
+      border-color: #3182ce;
+    }
+
+    button.danger {
+      background: #e53e3e;
+      color: #fff;
+      border-color: #e53e3e;
+    }
+
+    .card {
+      background: #fff;
+      padding: 16px;
+      margin-bottom: 20px;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, .1);
+      border-radius: 6px;
+    }
+
+    .flash {
+      background: #feebc8;
+      color: #7b341e;
+      padding: 10px 14px;
+      border-radius: 6px;
+      margin-bottom: 16px;
+    }
+
+    .row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    label.chk {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
   </style>
 </head>
+
 <body>
-<header>
-  <strong>TNC-server</strong>
-  {{if .User}}
+  <header>
+    <strong>TNC-server</strong>
+    {{if .User}}
     <a href="/">Устройства</a>
-    <a href="/logs">Логи</a> 
-    {{if eq (printf "%s" .User.Role) "privileged"}}<a href="/users">Пользователи</a>{{end}}
+    <a href="/logs">Логи</a>
+    {{if eq (printf "%s" .User.Role) "admin"}}<a href="/users">Пользователи</a>{{end}}
     <span class="spacer"></span>
     <span>{{.User.Username}} ({{.User.Role}})</span>
     <form class="inline" method="post" action="/logout"><button>Выйти</button></form>
-  {{end}}
-</header>
-<main>
-{{end}}
+    {{end}}
+  </header>
+  <main>
+    {{end}}
 
-{{define "bottom"}}
-</main>
+    {{define "bottom"}}
+  </main>
 </body>
+
 </html>
 {{end}}

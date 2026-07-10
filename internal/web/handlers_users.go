@@ -49,9 +49,27 @@ func (s *Server) handleUserDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Prevent an admin from deleting their own account (would lock them out).
-	if u := userFrom(r.Context()); u != nil && u.ID == id {
+	// Запрещаем пользователю удалять самого себя
+	currentUser := userFrom(r.Context())
+	if currentUser != nil && currentUser.ID == id {
 		http.Redirect(w, r, "/users?flash=Нельзя+удалить+себя", http.StatusSeeOther)
+		return
+	}
+
+	// Получаем информацию о пользователе, которого пытаются удалить
+	targetUser, err := s.users.Get(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			http.Redirect(w, r, "/users?flash=Пользователь+не+найден", http.StatusSeeOther)
+			return
+		}
+		http.Redirect(w, r, "/users?flash=Ошибка+при+получении+пользователя", http.StatusSeeOther)
+		return
+	}
+
+	// Запрещаем удаление администраторов (даже другим админам)
+	if targetUser.Role.IsAdmin() {
+		http.Redirect(w, r, "/users?flash=Нельзя+удалить+администратора", http.StatusSeeOther)
 		return
 	}
 

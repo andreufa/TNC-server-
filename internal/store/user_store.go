@@ -22,6 +22,24 @@ func NewUserStore(pool *pgxpool.Pool) *UserStore {
 	return &UserStore{pool: pool}
 }
 
+// Get получает пользователя по ID
+func (s *UserStore) Get(ctx context.Context, id uuid.UUID) (*models.User, error) {
+	var u models.User
+	var hash string
+
+	err := s.pool.QueryRow(ctx,
+		`SELECT id, username, password_hash, role, created_at FROM users WHERE id = $1`, id).
+		Scan(&u.ID, &u.Username, &hash, &u.Role, &u.CreatedAt)
+
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &u, nil
+}
+
 // List returns all users ordered by username.
 func (s *UserStore) List(ctx context.Context) ([]models.User, error) {
 	rows, err := s.pool.Query(ctx,
@@ -78,7 +96,8 @@ func (s *UserStore) EnsureBootstrap(ctx context.Context, username, plainPassword
 	if exists {
 		return nil
 	}
-	return s.Create(ctx, username, plainPassword, models.RolePrivileged)
+	// Создаём администратора вместо привилегированного пользователя
+	return s.Create(ctx, username, plainPassword, models.RoleAdmin)
 }
 
 // VerifyUser checks username+password and returns the user on success.

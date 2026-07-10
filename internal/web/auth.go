@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"errors"
+	"log"
 	"net/http"
 	"time"
 
@@ -52,10 +53,39 @@ func requireAuth(next http.HandlerFunc) http.HandlerFunc {
 func requireRole(role models.Role, next http.HandlerFunc) http.HandlerFunc {
 	return requireAuth(func(w http.ResponseWriter, r *http.Request) {
 		u := userFrom(r.Context())
+		if u == nil {
+			http.Redirect(w, r, "/login", http.StatusSeeOther)
+			return
+		}
 		if u.Role != role {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
+		next(w, r)
+	})
+}
+
+// requireAdmin проверяет, что пользователь авторизован и имеет роль admin
+func requireAdmin(next http.HandlerFunc) http.HandlerFunc {
+	return requireAuth(func(w http.ResponseWriter, r *http.Request) {
+		u := userFrom(r.Context())
+		if u == nil {
+			log.Println("❌ requireAdmin: user is nil")
+			http.Redirect(w, r, "/login", http.StatusSeeOther)
+			return
+		}
+
+		// ОТЛАДКА: выводим информацию о пользователе
+		log.Printf("🔍 requireAdmin: user=%s, role='%s', isAdmin=%v",
+			u.Username, u.Role, u.Role.IsAdmin())
+
+		if !u.Role.IsAdmin() {
+			log.Printf("❌ requireAdmin: access denied for user '%s' with role '%s'", u.Username, u.Role)
+			http.Redirect(w, r, "/?flash=Доступ+запрещён", http.StatusSeeOther)
+			return
+		}
+
+		log.Printf("✅ requireAdmin: access granted for user '%s'", u.Username)
 		next(w, r)
 	})
 }

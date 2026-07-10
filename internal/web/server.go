@@ -59,10 +59,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /devices/{id}/password", requireRole(models.RolePrivileged, s.handleDevicePassword))
 	mux.HandleFunc("POST /devices/{id}/rename", requireRole(models.RolePrivileged, s.handleDeviceRename))
 
-	// Users — privileged only.
-	mux.HandleFunc("GET /users", requireRole(models.RolePrivileged, s.handleUserList))
-	mux.HandleFunc("POST /users/add", requireRole(models.RolePrivileged, s.handleUserAdd))
-	mux.HandleFunc("POST /users/{id}/delete", requireRole(models.RolePrivileged, s.handleUserDelete))
+	// Users — ТОЛЬКО ДЛЯ ADMIN (изменено с RolePrivileged на Admin)
+	mux.HandleFunc("GET /users", requireAdmin(s.handleUserList))
+	mux.HandleFunc("POST /users/add", requireAdmin(s.handleUserAdd))
+	mux.HandleFunc("POST /users/{id}/delete", requireAdmin(s.handleUserDelete))
 
 	// Logs — viewing is allowed for any authenticated user.
 	mux.HandleFunc("GET /logs", requireAuth(s.handleLogsPage))
