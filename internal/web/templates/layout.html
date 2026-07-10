@@ -34,6 +34,7 @@
   <strong>TNC-server</strong>
   {{if .User}}
     <a href="/">Устройства</a>
+    <a href="/logs">Логи</a> 
     {{if eq (printf "%s" .User.Role) "privileged"}}<a href="/users">Пользователи</a>{{end}}
     <span class="spacer"></span>
     <span>{{.User.Username}} ({{.User.Role}})</span>

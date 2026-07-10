@@ -32,17 +32,19 @@ type Server struct {
 	devices *store.DeviceStore
 	hub     *hub.Hub
 
-	ln   net.Listener
-	wg   sync.WaitGroup
-	quit chan struct{}
+	ln      net.Listener
+	wg      sync.WaitGroup
+	quit    chan struct{}
+	logChan chan<- string
 }
 
-func NewServer(addr string, devices *store.DeviceStore, h *hub.Hub) *Server {
+func NewServer(addr string, devices *store.DeviceStore, h *hub.Hub, logChan chan<- string) *Server {
 	return &Server{
 		addr:    addr,
 		devices: devices,
 		hub:     h,
 		quit:    make(chan struct{}),
+		logChan: logChan,
 	}
 }
 

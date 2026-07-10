@@ -15,23 +15,28 @@ var templatesFS embed.FS
 
 // Server is the HTTP frontend (web form).
 type Server struct {
-	devices  *store.DeviceStore
-	users    *store.UserStore
-	sessions *store.SessionStore
-	tmpl     *template.Template
+	devices   *store.DeviceStore
+	users     *store.UserStore
+	sessions  *store.SessionStore
+	tmpl      *template.Template
+	logServer *LogServer // добавляем
 }
 
 // NewServer builds the web server and parses templates.
-func NewServer(devices *store.DeviceStore, users *store.UserStore, sessions *store.SessionStore) (*Server, error) {
+func NewServer(devices *store.DeviceStore, users *store.UserStore, sessions *store.SessionStore, logChan <-chan string) (*Server, error) {
 	tmpl, err := template.ParseFS(templatesFS, "templates/*.html")
 	if err != nil {
 		return nil, err
 	}
+
+	logServer := NewLogServer(logChan)
+
 	return &Server{
-		devices:  devices,
-		users:    users,
-		sessions: sessions,
-		tmpl:     tmpl,
+		devices:   devices,
+		users:     users,
+		sessions:  sessions,
+		tmpl:      tmpl,
+		logServer: logServer,
 	}, nil
 }
 
@@ -58,6 +63,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /users", requireRole(models.RolePrivileged, s.handleUserList))
 	mux.HandleFunc("POST /users/add", requireRole(models.RolePrivileged, s.handleUserAdd))
 	mux.HandleFunc("POST /users/{id}/delete", requireRole(models.RolePrivileged, s.handleUserDelete))
+
+	// Logs — viewing is allowed for any authenticated user.
+	mux.HandleFunc("GET /logs", requireAuth(s.handleLogsPage))
+	mux.HandleFunc("GET /logs/ws", requireAuth(s.handleLogsWS))
 
 	return s.withUser(mux)
 }

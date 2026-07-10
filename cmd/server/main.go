@@ -19,24 +19,6 @@ import (
 )
 
 func main() {
-	// // --- ОТЛАДКА: Проверяем, что видит программа ---
-	// cwd, _ := filepath.Abs(".")
-	// log.Printf("[DEBUG] Working directory: %s", cwd)
-
-	// checkFile := func(name string) {
-	// 	_, err := os.Stat(name)
-	// 	if err == nil {
-	// 		log.Printf("[DEBUG] ✅ File found: %s", name)
-	// 		data, _ := os.ReadFile(name)
-	// 		log.Printf("[DEBUG] Content of %s:\n%s", name, string(data))
-	// 	} else {
-	// 		log.Printf("[DEBUG] ❌ File NOT found: %s (error: %v)", name, err)
-	// 	}
-	// }
-
-	// checkFile(".env.local")
-	// checkFile(".env")
-	// // -----------------------------------------------
 	if err := run(); err != nil {
 		log.Fatalf("fatal: %v", err)
 	}
@@ -88,13 +70,16 @@ func run() error {
 	go h.Run()
 	defer h.Stop()
 
+	// --- log channel ---
+	logChan := make(chan string, 1000)
+
 	// --- TCP server ---
-	tcpSrv := tcp.NewServer(cfg.TCPAddr, devices, h)
+	tcpSrv := tcp.NewServer(cfg.TCPAddr, devices, h, logChan)
 	tcpErr := make(chan error, 1)
 	go func() { tcpErr <- tcpSrv.ListenAndServe() }()
 
 	// --- HTTP server ---
-	webSrv, err := web.NewServer(devices, users, sessions)
+	webSrv, err := web.NewServer(devices, users, sessions, logChan)
 	if err != nil {
 		return err
 	}
@@ -128,10 +113,16 @@ func run() error {
 	// --- graceful shutdown ---
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+
 	if err := httpSrv.Shutdown(shutdownCtx); err != nil {
 		log.Printf("http: shutdown error: %v", err)
 	}
+
 	tcpSrv.Shutdown()
+
+	// Закрываем канал логов
+	close(logChan)
+
 	log.Print("shutdown: complete")
 	return nil
 }
