@@ -22,11 +22,11 @@ func (s *Server) handleDeviceList(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleDeviceAdd(w http.ResponseWriter, r *http.Request) {
 	id := r.FormValue("id")
-	password := r.FormValue("password")
+	publicKey := r.FormValue("public_key")
 	inService := r.FormValue("in_service") == "on"
 
-	if id == "" || password == "" {
-		http.Redirect(w, r, "/?flash=ID+и+пароль+обязательны", http.StatusSeeOther)
+	if id == "" || publicKey == "" {
+		http.Redirect(w, r, "/?flash=ID+и+публичный+ключ+обязательны", http.StatusSeeOther)
 		return
 	}
 
@@ -44,7 +44,7 @@ func (s *Server) handleDeviceAdd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.devices.Add(r.Context(), id, password, inService, user.ID); err != nil {
+	if err := s.devices.Add(r.Context(), id, publicKey, inService, user.ID); err != nil {
 		http.Redirect(w, r, "/?flash=Не+удалось+добавить+(возможно+ID+занят)", http.StatusSeeOther)
 		return
 	}

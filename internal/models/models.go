@@ -24,26 +24,20 @@ func (r Role) Valid() bool {
 	}
 }
 
-// IsPrivileged checks if the user has privileged access
-func (r Role) IsPrivileged() bool {
-	return r == RolePrivileged || r == RoleAdmin
-}
-
-// IsAdmin checks if the user is an administrator
-func (r Role) IsAdmin() bool {
-	return r == RoleAdmin
-}
+func (r Role) IsPrivileged() bool { return r == RolePrivileged || r == RoleAdmin }
+func (r Role) IsAdmin() bool      { return r == RoleAdmin }
 
 // Device is a managed device that can connect over TCP.
 type Device struct {
 	ID           string
+	PublicKey    string     // RSA public key (PEM) for crypto handshake
 	RegisteredAt time.Time
 	DeletedAt    *time.Time
 	InService    bool
 	UpdatedBy    *uuid.UUID
 	UpdatedAt    time.Time
 	LastSeenAt   *time.Time
-	IsOnline     bool // вычисленный статус: онлайн/офлайн
+	IsOnline     bool // computed: online/offline
 }
 
 // User is a web-form account.

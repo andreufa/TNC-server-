@@ -1,59 +1,97 @@
-# TNC-server
+# TNC-server — Crypto Handshake
 
-Go-сервер управления устройствами: веб-форма (CRUD устройств + пользователи с ролями),
-TCP-сервер для устройств с broadcast-пересылкой сообщений, хранение в PostgreSQL.
+Go TCP server for device authentication via RSA challenge-response.
 
-## Возможности
+## How it works
 
-- **Устройства** в Postgres: ID, пароль (bcrypt), дата регистрации, мягкое удаление, флаг «в обслуживании».
-- **Веб-форма** (`html/template`, серверные сессии + cookie):
-  - роль `user` — просмотр списка устройств и их статуса;
-  - роль `privileged` — добавление, удаление, смена статуса, сброс пароля, смена ID, создание пользователей.
-- **TCP-сервер**: устройство подключается, шлёт handshake `{"device_id","password"}\n`,
-  сервер проверяет по БД (устройство не удалено и «в обслуживании»). После `{"status":"ok"}`
-  устройство шлёт `\n`-разделённые JSON-строки; сервер **широковещательно** пересылает их
-  всем остальным подключённым устройствам (отправителю — нет).
+1. Device connects over TCP and sends its ID (binary frame, CmdHello)
+2. Server looks up the device's **public key** in Postgres
+3. Server sends a **challenge**: 8 random bytes + Unix timestamp (16 bytes)
+4. Device **signs** the challenge with its RSA **private key** and sends the signature back
+5. Server **verifies** the signature with the stored public key, checks TTL (5 min)
+6. Success → `CmdSuccess` / Failure → `CmdDenied`
 
-## Запуск
+## Wire format
+
+Every message is a binary frame:
+
+```
+$ | Addr+Spec(1) | Cmd(1) | DataLen(2, BE) | Data(X) | CRC(1)
+```
+
+- CRC = XOR of bytes from Addr through end of Data
+- Address: `0x10` = server, `0x20` = device
+- Max data length: 1024 bytes
+
+### Commands
+
+| Cmd | Direction | Description |
+|-----|-----------|-------------|
+| 0x01 | Dev → Srv | Hello (device ID as ASCII) |
+| 0x02 | Srv → Dev | Challenge (16 bytes: 8 nonce + 8 timestamp) |
+| 0x03 | Dev → Srv | Response (2B ID len + device ID + RSA signature) |
+| 0x04 | Srv → Dev | Success |
+| 0x05 | Srv → Dev | Denied |
+
+## Quick start
 
 ```sh
-# 1. Postgres
+# 1. Start Postgres
 docker compose up -d
 
-# 2. конфигурация
-cp .env.example .env        # при необходимости отредактировать
+# 2. Generate keys with OpenSSL
+openssl genpkey -algorithm RSA -out private_key.pem -pkeyopt rsa_keygen_bits:2048
+openssl rsa -pubout -in private_key.pem -out public_key.pem
 
-# 3. сервер (применит миграции и создаст bootstrap-админа)
+# 3. Register device 37777
+go run ./cmd/keygen public_key.pem
+# → apply the printed SQL to your database
+
+# 4. Start the server
 go run ./cmd/server
+
+# 5. Test with the client
+go run ./cmd/challenge_client 37777 private_key.pem
 ```
 
-- Веб: http://localhost:8080 (логин по умолчанию `admin` / `admin`).
-- TCP: `localhost:9000`.
-
-## Ручная проверка TCP (broadcast)
-
-В трёх терминалах:
+The test client includes a built-in stub key — you can also run without a key file:
 
 ```sh
-# слушатель (валидное устройство «в обслуживании»)
-go run ./cmd/devclient dev1 secret
-
-# ещё один слушатель
-go run ./cmd/devclient dev2 secret
-
-# отправитель — пошлёт сообщение, которое получат dev1 и dev2
-go run ./cmd/devclient dev3 secret '{"temp":42}'
+go run ./cmd/challenge_client 37777
 ```
 
-Устройство не «в обслуживании» или с неверным паролем получит `{"status":"denied"}` и разрыв.
+The matching stub public key is in `_stub_public.pem`. Register it first with `cmd/keygen`.
 
-## Конфигурация (env / .env)
+## Configuration
 
-| Переменная                 | Назначение                          | По умолчанию            |
-|----------------------------|-------------------------------------|-------------------------|
-| `DATABASE_URL`             | строка подключения Postgres         | локальный docker        |
-| `HTTP_ADDR`                | адрес веб-сервера                   | `:8080`                 |
-| `TCP_ADDR`                 | адрес TCP-сервера                   | `:9000`                 |
-| `SESSION_SECRET`           | секрет (обязателен)                 | —                       |
-| `BOOTSTRAP_ADMIN_USER`     | имя стартового админа               | `admin`                 |
-| `BOOTSTRAP_ADMIN_PASSWORD` | пароль стартового админа            | `admin`                 |
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DB_HOST` | `localhost` | Postgres host |
+| `DB_PORT` | `5432` | Postgres port |
+| `DB_USER` | `tnc` | Postgres user |
+| `DB_PASSWORD` | `tnc` | Postgres password |
+| `DB_NAME` | `tnc` | Database name |
+| `DB_SSL_MODE` | `disable` | SSL mode |
+| `CRYPTO_TCP_ADDR` | `:9001` | TCP listen address |
+| `DATABASE_URL` | — | Full Postgres DSN (overrides individual vars) |
+
+## Database
+
+```sql
+CREATE TABLE devices (
+    id            TEXT PRIMARY KEY,
+    public_key    TEXT        NOT NULL,
+    registered_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    deleted_at    TIMESTAMPTZ,
+    in_service    BOOLEAN     NOT NULL DEFAULT false,
+    last_seen_at  TIMESTAMPTZ
+);
+```
+
+## For STM32
+
+- **Crypto**: RSA 2048-bit PKCS#1 v1.5 with SHA-256 (widely supported in mbedTLS / wolfSSL)
+- **Challenge**: only 16 bytes — minimal memory footprint
+- **Framing**: simple fixed-format binary with CRC — easy state machine
+- Device stores the **private key** in persistent memory (generated by OpenSSL)
+- Server stores only the **public key** — no passwords

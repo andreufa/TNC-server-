@@ -12,7 +12,7 @@
   <h3>Добавить устройство</h3>
   <form method="post" action="/devices/add" class="row">
     <input name="id" placeholder="Device ID" required>
-    <input name="password" type="text" placeholder="Пароль" required>
+    <textarea name="public_key" placeholder="Публичный ключ (PEM)" required rows="4"></textarea>
     <label class="chk"><input type="checkbox" name="in_service"> В эксплуатацию</label>
     <button class="primary" type="submit">Добавить</button>
   </form>

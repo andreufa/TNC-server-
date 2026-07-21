@@ -291,17 +291,6 @@ func formatLog(eventType, deviceID, message string) string {
 	return string(data)
 }
 
-func crcCalc(buf []byte) byte {
-	if len(buf) == 0 {
-		return 0
-	}
-	crc := buf[0]
-	for i := 1; i < len(buf); i++ {
-		crc ^= buf[i]
-	}
-	return crc
-}
-
 var allowedCommands = map[string]struct{}{
 	"109": {},
 	"110": {},

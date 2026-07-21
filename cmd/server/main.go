@@ -73,10 +73,15 @@ func run() error {
 	// --- log channel ---
 	logChan := make(chan string, 1000)
 
-	// --- TCP server ---
+	// --- TCP server (JSON/broadcast) ---
 	tcpSrv := tcp.NewServer(cfg.TCPAddr, devices, h, logChan)
 	tcpErr := make(chan error, 1)
 	go func() { tcpErr <- tcpSrv.ListenAndServe() }()
+
+	// --- Crypto TCP server ---
+	cryptoSrv := tcp.NewCryptoServer(cfg.CryptoTCPAddr, devices, logChan)
+	cryptoErr := make(chan error, 1)
+	go func() { cryptoErr <- cryptoSrv.ListenAndServe() }()
 
 	// --- HTTP server ---
 	webSrv, err := web.NewServer(devices, users, sessions, logChan)
@@ -104,6 +109,10 @@ func run() error {
 		if err != nil {
 			log.Printf("tcp: server error: %v", err)
 		}
+	case err := <-cryptoErr:
+		if err != nil {
+			log.Printf("crypto-tcp: server error: %v", err)
+		}
 	case err := <-httpErr:
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Printf("http: server error: %v", err)
@@ -119,8 +128,7 @@ func run() error {
 	}
 
 	tcpSrv.Shutdown()
-
-	// Закрываем канал логов
+	cryptoSrv.Shutdown()
 	close(logChan)
 
 	log.Print("shutdown: complete")
