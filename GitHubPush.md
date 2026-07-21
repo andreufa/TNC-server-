@@ -1,30 +1,19 @@
-# Push to GitHub
+### 1. Собираем образ
+    docker build -t tnc-server:latest .
+### 2. Коннектимся с github Registry
+### 3. Задаем тег собранному образу
+    docker tag tnc-server ghcr.io/andreufa/tnc-server:1.0
+### 4. Пушим его в Registry
+     docker push ghcr.io/andreufa/tnc-server:1.0
 
-## Prerequisites
-- Git installed
-- GitHub account
-- Repository created on GitHub (e.g. `https://github.com/yourname/tnc-server`)
 
-## Steps
+## Если изменился только образ сервера
+Так как изменился только образ server, используй точечное обновление:
 
-```sh
-# 1. Add remote (if not already set)
-git remote add origin https://github.com/yourname/tnc-server.git
+bash
+### 1. Скачиваем новую версию образа
+docker compose pull server
 
-# 2. Push the current branch
-git push -u origin crypto-handshake
-
-# 3. For subsequent pushes
-git push
-```
-
-## Pushing a new branch
-
-```sh
-git checkout -b feature/my-feature
-git push -u origin feature/my-feature
-```
-
-## Notes
-- The `.gitignore` excludes: `*.exe`, `.env`, `*.pem` (private keys), `tnc-pgdata/`
-- Public keys (`.pem` with `_public` suffix) and stub keys are tracked intentionally
+### 2. Пересоздаем только сервис server
+docker compose up -d --no-deps --force-recreate server
+Это самый чистый способ: db продолжит работать без остановки, а server получит новый образ.
