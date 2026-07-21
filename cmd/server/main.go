@@ -12,6 +12,7 @@ import (
 
 	"tnc-server/internal/config"
 	"tnc-server/internal/db"
+	"tnc-server/internal/hub"
 	"tnc-server/internal/store"
 	"tnc-server/internal/tcp"
 	"tnc-server/internal/web"
@@ -67,8 +68,13 @@ func run() error {
 	// --- log channel ---
 	logChan := make(chan string, 1000)
 
+	// --- hub (pub/sub for device broadcasts) ---
+	h := hub.New()
+	go h.Run()
+	defer h.Stop()
+
 	// --- Crypto TCP server ---
-	cryptoSrv := tcp.NewCryptoServer(cfg.CryptoTCPAddr, devices, logChan)
+	cryptoSrv := tcp.NewCryptoServer(cfg.CryptoTCPAddr, devices, h, logChan)
 	cryptoErr := make(chan error, 1)
 	go func() { cryptoErr <- cryptoSrv.ListenAndServe() }()
 

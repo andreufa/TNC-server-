@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"tnc-server/internal/hub"
 	"tnc-server/internal/store"
 )
 
@@ -19,6 +20,7 @@ import (
 type CryptoServer struct {
 	addr    string
 	devices *store.DeviceStore
+	hub     *hub.Hub
 	logChan chan<- string
 
 	ln   net.Listener
@@ -27,10 +29,11 @@ type CryptoServer struct {
 }
 
 // NewCryptoServer creates a new crypto handshake server.
-func NewCryptoServer(addr string, devices *store.DeviceStore, logChan chan<- string) *CryptoServer {
+func NewCryptoServer(addr string, devices *store.DeviceStore, h *hub.Hub, logChan chan<- string) *CryptoServer {
 	return &CryptoServer{
 		addr:    addr,
 		devices: devices,
+		hub:     h,
 		logChan: logChan,
 		quit:    make(chan struct{}),
 	}
@@ -150,12 +153,11 @@ func (s *CryptoServer) handleConnection(conn net.Conn) {
 
 	// === Step 4: Read authorization request (Addr=0x62, Cmd=0x65) ===
 	conn.SetReadDeadline(time.Now().Add(30 * time.Second))
-	fr, raw, err = frameReader.ReadFrame()
+	fr, _, err = frameReader.ReadFrame()
 	if err != nil {
 		log.Printf("crypto-tcp: [%s] read auth request: %v", remote, err)
 		return
 	}
-	s.logRawFrame(deviceID, raw)
 	if fr.Addr != AddrDeviceAuth || fr.Cmd != CmdAuth {
 		s.sendResult(conn, ResultSpecError, fr.Addr, fr.Cmd, "expected Addr=0x62 Cmd=0x65")
 		return
@@ -208,13 +210,18 @@ func (s *CryptoServer) handleConnection(conn net.Conn) {
 		return
 	}
 
-	// === Step 7: Success (Addr=0x63, Cmd=0x65) ===
+	// === Step 7: Success — subscribe to hub ===
 	log.Printf("crypto-tcp: [%s] device %q authenticated successfully", remote, deviceID)
 	s.logEvent("auth", deviceID, "authorized")
 
 	if err := s.devices.UpdateLastSeen(context.Background(), deviceID); err != nil {
 		log.Printf("crypto-tcp: [%s] update last seen for %q: %v", remote, deviceID, err)
 	}
+
+	// Subscribe to hub for broadcast
+	sub := s.hub.Subscribe()
+	defer s.hub.Unsubscribe(sub)
+	log.Printf("crypto-tcp: [%s] device %q subscribed (id=%d)", remote, deviceID, sub.ID())
 
 	// Build result: 10 bytes device ID + 1 byte code
 	resultData := make([]byte, DeviceIDSize+1)
@@ -233,10 +240,28 @@ func (s *CryptoServer) handleConnection(conn net.Conn) {
 
 	log.Printf("crypto-tcp: [%s] handshake complete for %q", remote, deviceID)
 
-	// === Post-handshake: read loop ===
+	// Start writer goroutine: forward broadcast data to this device.
+	// Stops when sub.C is closed (on unsubscribe) or conn write fails.
+	writerDone := make(chan struct{})
+	go func() {
+		defer close(writerDone)
+		for data := range sub.C {
+			// Wrap broadcast data in a frame and send to device
+			bcFrame := Frame{
+				Addr: AddrServerResult,
+				Cmd:  CmdAuth,
+				Data: data,
+			}
+			if _, err := conn.Write(EncodeFrame(bcFrame)); err != nil {
+				return
+			}
+		}
+	}()
+
+	// === Post-handshake: read loop with broadcast ===
 	for {
 		conn.SetReadDeadline(time.Now().Add(5 * time.Minute))
-		fr, raw, err := frameReader.ReadFrame()
+		fr, _, err := frameReader.ReadFrame()
 		if err != nil {
 			if errNet, ok := err.(net.Error); ok && errNet.Timeout() {
 				log.Printf("crypto-tcp: [%s] idle timeout for %q", remote, deviceID)
@@ -247,7 +272,6 @@ func (s *CryptoServer) handleConnection(conn net.Conn) {
 			}
 			return
 		}
-		s.logRawFrame(deviceID, raw)
 		log.Printf("crypto-tcp: [%s] message from %q: Addr=0x%02x Cmd=0x%02x data=%x",
 			remote, deviceID, fr.Addr, fr.Cmd, fr.Data)
 		s.logEvent("message", deviceID, fmt.Sprintf("Addr=0x%02x Cmd=0x%02x data=%x", fr.Addr, fr.Cmd, fr.Data))
@@ -255,6 +279,33 @@ func (s *CryptoServer) handleConnection(conn net.Conn) {
 		if err := s.devices.UpdateLastSeen(context.Background(), deviceID); err != nil {
 			log.Printf("crypto-tcp: [%s] update last seen for %q: %v", remote, deviceID, err)
 		}
+
+		// Process command and broadcast to other subscribers
+		broadcastData := s.processCommand(fr, deviceID)
+		if broadcastData != nil {
+			s.logEvent("broadcast", deviceID, hex.EncodeToString(broadcastData))
+			s.hub.Broadcast(broadcastData, sub.ID())
+		}
+	}
+}
+
+// processCommand handles a post-auth command frame from a device.
+// Returns data to broadcast to other subscribers, or nil to skip broadcast.
+// Override this method or extend it for command-specific preprocessing.
+func (s *CryptoServer) processCommand(fr Frame, deviceID string) []byte {
+	// Default: broadcast the raw frame data to other subscribers.
+	// Different commands can be handled with different preprocessing.
+	switch fr.Addr {
+	// Future: add command-specific cases here, e.g.:
+	// case 0x70:
+	//     return preprocessTelemetry(fr.Data, deviceID)
+	default:
+		// Broadcast the full frame (Addr + Cmd + Data) to others
+		out := make([]byte, 1+1+len(fr.Data))
+		out[0] = fr.Addr
+		out[1] = fr.Cmd
+		copy(out[2:], fr.Data)
+		return out
 	}
 }
 

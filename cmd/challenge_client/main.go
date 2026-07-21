@@ -27,6 +27,7 @@ import (
 	"crypto/x509"
 	"encoding/binary"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -202,7 +203,29 @@ func main() {
 		os.Exit(1)
 	}
 
-	// === Step 6: Loop — wait for Enter, send message ===
+	// === Step 6: Background reader — print everything from server ===
+	stopReader := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-stopReader:
+				return
+			default:
+			}
+			conn.SetReadDeadline(time.Now().Add(1 * time.Second))
+			fr, err := readFrame(reader)
+			if err != nil {
+				var netErr net.Error
+				if errors.As(err, &netErr) && netErr.Timeout() {
+					continue
+				}
+				return
+			}
+			fmt.Printf("\r[client] <- RECV: Addr=0x%02x Cmd=0x%02x data=%x\n", fr.addr, fr.cmd, fr.data)
+		}
+	}()
+
+	// === Step 7: Loop — wait for Enter, send message ===
 	stdin := bufio.NewReader(os.Stdin)
 	for {
 		fmt.Print("[client] Press Enter to send message (Ctrl+C to exit)...")
@@ -220,6 +243,7 @@ func main() {
 			break
 		}
 	}
+	close(stopReader)
 	fmt.Println("[client] done, closing connection")
 }
 
