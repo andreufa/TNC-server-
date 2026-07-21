@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"log"
@@ -68,6 +69,21 @@ func (s *CryptoServer) Shutdown() {
 	s.wg.Wait()
 }
 
+func padDeviceID(id string) []byte {
+	buf := make([]byte, DeviceIDSize)
+	copy(buf, id)
+	return buf
+}
+
+func trimDeviceID(b []byte) string {
+	for i := len(b) - 1; i >= 0; i-- {
+		if b[i] != 0 && b[i] != ' ' {
+			return string(b[:i+1])
+		}
+	}
+	return ""
+}
+
 func (s *CryptoServer) handleConnection(conn net.Conn) {
 	defer s.wg.Done()
 	defer conn.Close()
@@ -79,52 +95,52 @@ func (s *CryptoServer) handleConnection(conn net.Conn) {
 	reader := bufio.NewReader(conn)
 	frameReader := NewFrameReader(reader)
 
-	// === Step 1: Read Hello (device sends its ID) ===
+	// === Step 1: Read Hello (Addr=0x60, Cmd=0x65) ===
 	conn.SetReadDeadline(time.Now().Add(30 * time.Second))
-	fr, err := frameReader.ReadFrame()
+	fr, raw, err := frameReader.ReadFrame()
 	if err != nil {
 		log.Printf("crypto-tcp: [%s] read hello: %v", remote, err)
 		return
 	}
-	if fr.Cmd != CmdHello {
-		s.sendDenied(conn, fmt.Sprintf("expected hello (0x%02x), got 0x%02x", CmdHello, fr.Cmd))
+	s.logRawFrame("", raw)
+	if fr.Addr != AddrDeviceHello || fr.Cmd != CmdAuth {
+		s.sendResult(conn, ResultSpecError, fr.Addr, fr.Cmd, "expected Addr=0x60 Cmd=0x65")
 		return
 	}
-	deviceID := string(fr.Data)
+	deviceID := trimDeviceID(fr.Data)
 	log.Printf("crypto-tcp: [%s] hello from device %q", remote, deviceID)
-	s.logEvent("auth", deviceID, fmt.Sprintf("hello from %s", remote))
+	s.logEvent("auth", deviceID, fmt.Sprintf("hello (Addr=0x%02x Cmd=0x%02x)", fr.Addr, fr.Cmd))
 
-	// === Step 2: Look up device in DB, get public key ===
+	// === Step 2: Look up device in DB ===
 	pubKeyPEM, err := s.devices.GetPublicKey(context.Background(), deviceID)
 	if err != nil {
-		log.Printf("crypto-tcp: [%s] device %q not found or no public key: %v", remote, deviceID, err)
-		s.sendDenied(conn, "device not found")
+		log.Printf("crypto-tcp: [%s] device %q not found: %v", remote, deviceID, err)
+		s.sendResult(conn, ResultAuthError, 0, 0, "device not found")
 		s.logEvent("auth", deviceID, "denied: device not found")
 		return
 	}
 
-	// === Step 3: Check device is in service ===
 	inService, err := s.devices.IsInService(context.Background(), deviceID)
 	if err != nil || !inService {
 		log.Printf("crypto-tcp: [%s] device %q not in service", remote, deviceID)
-		s.sendDenied(conn, "device not in service")
+		s.sendResult(conn, ResultAuthError, 0, 0, "device not in service")
 		s.logEvent("auth", deviceID, "denied: not in service")
 		return
 	}
 
-	// === Step 4: Generate challenge ===
+	// === Step 3: Generate and send challenge (Addr=0x61, Cmd=0x65) ===
 	challenge, err := GenerateChallenge()
 	if err != nil {
 		log.Printf("crypto-tcp: [%s] generate challenge: %v", remote, err)
-		s.sendDenied(conn, "internal error")
+		s.sendResult(conn, ResultDecodeError, 0, 0, "internal error")
 		return
 	}
 	log.Printf("crypto-tcp: [%s] sending challenge to %q (len=%d)", remote, deviceID, len(challenge))
+	s.logEvent("message", deviceID, fmt.Sprintf("challenge sent (time=%x key=%x)", challenge[:8], challenge[8:]))
 
-	// === Step 5: Send challenge to device ===
 	challengeFrame := Frame{
-		Addr: AddrServer,
-		Cmd:  CmdChallenge,
+		Addr: AddrServerChallenge,
+		Cmd:  CmdAuth,
 		Data: challenge,
 	}
 	if _, err := conn.Write(EncodeFrame(challengeFrame)); err != nil {
@@ -132,94 +148,95 @@ func (s *CryptoServer) handleConnection(conn net.Conn) {
 		return
 	}
 
-	// === Step 6: Read response (device ID + signature) ===
+	// === Step 4: Read authorization request (Addr=0x62, Cmd=0x65) ===
 	conn.SetReadDeadline(time.Now().Add(30 * time.Second))
-	fr, err = frameReader.ReadFrame()
+	fr, raw, err = frameReader.ReadFrame()
 	if err != nil {
-		log.Printf("crypto-tcp: [%s] read response: %v", remote, err)
+		log.Printf("crypto-tcp: [%s] read auth request: %v", remote, err)
 		return
 	}
-	if fr.Cmd != CmdResponse {
-		s.sendDenied(conn, fmt.Sprintf("expected response (0x%02x), got 0x%02x", CmdResponse, fr.Cmd))
+	s.logRawFrame(deviceID, raw)
+	if fr.Addr != AddrDeviceAuth || fr.Cmd != CmdAuth {
+		s.sendResult(conn, ResultSpecError, fr.Addr, fr.Cmd, "expected Addr=0x62 Cmd=0x65")
 		return
 	}
 
-	// Parse response: [2 bytes: deviceID length] [deviceID] [signature]
+	// Parse: 10 bytes Device ID + 256 bytes RSA signature = 266 bytes
 	respData := fr.Data
-	if len(respData) < 2 {
-		s.sendDenied(conn, "response too short")
+	if len(respData) < DeviceIDSize {
+		s.sendResult(conn, ResultDecodeError, 0, 0, "response too short")
 		return
 	}
-	idLen := binary.BigEndian.Uint16(respData[:2])
-	if len(respData) < int(2+idLen) {
-		s.sendDenied(conn, "response truncated")
-		return
-	}
-	respDeviceID := string(respData[2 : 2+idLen])
-	signature := respData[2+idLen:]
+	respDeviceID := trimDeviceID(respData[:DeviceIDSize])
+	signature := respData[DeviceIDSize:]
 
 	if respDeviceID != deviceID {
 		log.Printf("crypto-tcp: [%s] device ID mismatch: hello=%q, response=%q", remote, deviceID, respDeviceID)
-		s.sendDenied(conn, "device ID mismatch")
+		s.sendResult(conn, ResultAuthError, 0, 0, "device ID mismatch")
 		return
 	}
 
-	log.Printf("crypto-tcp: [%s] received response from %q (sig len=%d)", remote, deviceID, len(signature))
+	log.Printf("crypto-tcp: [%s] received auth request from %q (sig len=%d)", remote, deviceID, len(signature))
+	s.logEvent("message", deviceID, fmt.Sprintf("auth request (Addr=0x%02x Cmd=0x%02x sig=%d)", fr.Addr, fr.Cmd, len(signature)))
 
-	// === Step 7: Check challenge TTL ===
+	// === Step 5: Check TTL ===
 	expired, err := IsChallengeExpired(challenge)
 	if err != nil {
 		log.Printf("crypto-tcp: [%s] check TTL: %v", remote, err)
-		s.sendDenied(conn, "internal error")
+		s.sendResult(conn, ResultDecodeError, 0, 0, "internal error")
 		return
 	}
 	if expired {
 		log.Printf("crypto-tcp: [%s] challenge expired for %q", remote, deviceID)
-		s.sendDenied(conn, "challenge expired")
+		s.sendResult(conn, ResultAuthError, 0, 0, "challenge expired")
 		s.logEvent("auth", deviceID, "denied: challenge expired")
 		return
 	}
 
-	// === Step 8: Parse public key and verify signature ===
+	// === Step 6: Verify signature ===
 	pubKey, err := ParsePublicKey(pubKeyPEM)
 	if err != nil {
 		log.Printf("crypto-tcp: [%s] parse public key for %q: %v", remote, deviceID, err)
-		s.sendDenied(conn, "internal error")
+		s.sendResult(conn, ResultDecodeError, 0, 0, "internal error")
 		return
 	}
 
 	if err := VerifyChallengeResponse(pubKey, challenge, signature); err != nil {
 		log.Printf("crypto-tcp: [%s] signature verification failed for %q: %v", remote, deviceID, err)
-		s.sendDenied(conn, "signature verification failed")
+		s.sendResult(conn, ResultAuthError, 0, 0, "signature verification failed")
 		s.logEvent("auth", deviceID, "denied: signature verification failed")
 		return
 	}
 
-	// === Step 9: Success! ===
+	// === Step 7: Success (Addr=0x63, Cmd=0x65) ===
 	log.Printf("crypto-tcp: [%s] device %q authenticated successfully", remote, deviceID)
+	s.logEvent("auth", deviceID, "authorized")
 
-	// Update last seen
 	if err := s.devices.UpdateLastSeen(context.Background(), deviceID); err != nil {
 		log.Printf("crypto-tcp: [%s] update last seen for %q: %v", remote, deviceID, err)
 	}
 
-	successFrame := Frame{
-		Addr: AddrServer,
-		Cmd:  CmdSuccess,
-		Data: []byte("Success"),
+	// Build result: 10 bytes device ID + 1 byte code
+	resultData := make([]byte, DeviceIDSize+1)
+	copy(resultData[:DeviceIDSize], padDeviceID(deviceID))
+	resultData[DeviceIDSize] = ResultAuthorized
+
+	resultFrame := Frame{
+		Addr: AddrServerResult,
+		Cmd:  CmdAuth,
+		Data: resultData,
 	}
-	if _, err := conn.Write(EncodeFrame(successFrame)); err != nil {
-		log.Printf("crypto-tcp: [%s] send success: %v", remote, err)
+	if _, err := conn.Write(EncodeFrame(resultFrame)); err != nil {
+		log.Printf("crypto-tcp: [%s] send result: %v", remote, err)
 		return
 	}
 
 	log.Printf("crypto-tcp: [%s] handshake complete for %q", remote, deviceID)
-	s.logEvent("auth", deviceID, "handshake complete")
 
 	// === Post-handshake: read loop ===
 	for {
 		conn.SetReadDeadline(time.Now().Add(5 * time.Minute))
-		fr, err := frameReader.ReadFrame()
+		fr, raw, err := frameReader.ReadFrame()
 		if err != nil {
 			if errNet, ok := err.(net.Error); ok && errNet.Timeout() {
 				log.Printf("crypto-tcp: [%s] idle timeout for %q", remote, deviceID)
@@ -230,8 +247,10 @@ func (s *CryptoServer) handleConnection(conn net.Conn) {
 			}
 			return
 		}
-		log.Printf("crypto-tcp: [%s] message from %q: cmd=0x%02x data=%x", remote, deviceID, fr.Cmd, fr.Data)
-		s.logEvent("message", deviceID, fmt.Sprintf("cmd=0x%02x data=%x", fr.Cmd, fr.Data))
+		s.logRawFrame(deviceID, raw)
+		log.Printf("crypto-tcp: [%s] message from %q: Addr=0x%02x Cmd=0x%02x data=%x",
+			remote, deviceID, fr.Addr, fr.Cmd, fr.Data)
+		s.logEvent("message", deviceID, fmt.Sprintf("Addr=0x%02x Cmd=0x%02x data=%x", fr.Addr, fr.Cmd, fr.Data))
 
 		if err := s.devices.UpdateLastSeen(context.Background(), deviceID); err != nil {
 			log.Printf("crypto-tcp: [%s] update last seen for %q: %v", remote, deviceID, err)
@@ -239,13 +258,25 @@ func (s *CryptoServer) handleConnection(conn net.Conn) {
 	}
 }
 
-func (s *CryptoServer) sendDenied(conn net.Conn, reason string) {
-	deniedFrame := Frame{
-		Addr: AddrServer,
-		Cmd:  CmdDenied,
-		Data: []byte("Denied: " + reason),
+func (s *CryptoServer) sendResult(conn net.Conn, code byte, gotAddr, gotCmd byte, reason string) {
+	resultData := []byte(fmt.Sprintf("err:%s", reason))
+	frame := Frame{
+		Addr: AddrServerResult,
+		Cmd:  CmdAuth,
+		Data: resultData,
 	}
-	conn.Write(EncodeFrame(deniedFrame))
+	conn.Write(EncodeFrame(frame))
+	log.Printf("crypto-tcp: sendResult code=0x%02x reason=%s", code, reason)
+}
+
+func (s *CryptoServer) logRawFrame(deviceID string, raw []byte) {
+	if s.logChan == nil {
+		return
+	}
+	select {
+	case s.logChan <- formatLog("message", deviceID, "RAW "+hex.EncodeToString(raw)):
+	default:
+	}
 }
 
 func (s *CryptoServer) logEvent(eventType, deviceID, message string) {
@@ -269,13 +300,14 @@ func NewFrameReader(rd *bufio.Reader) *FrameReader {
 }
 
 // ReadFrame reads one complete frame. It scans for the preamble byte, then
-// reads the header, data, and CRC. Returns the decoded Frame or an error.
-func (fr *FrameReader) ReadFrame() (Frame, error) {
+// reads the header, data, and CRC. Returns the decoded Frame, the raw frame
+// bytes, and any error.
+func (fr *FrameReader) ReadFrame() (Frame, []byte, error) {
 	// Scan for preamble
 	for {
 		b, err := fr.rd.ReadByte()
 		if err != nil {
-			return Frame{}, fmt.Errorf("read preamble: %w", err)
+			return Frame{}, nil, fmt.Errorf("read preamble: %w", err)
 		}
 		if b == FramePreamble {
 			break
@@ -285,7 +317,7 @@ func (fr *FrameReader) ReadFrame() (Frame, error) {
 	// Read the next 4 bytes: addr + cmd + len(2)
 	header := make([]byte, 4)
 	if _, err := io.ReadFull(fr.rd, header); err != nil {
-		return Frame{}, fmt.Errorf("read header: %w", err)
+		return Frame{}, nil, fmt.Errorf("read header: %w", err)
 	}
 
 	addr := header[0]
@@ -293,13 +325,13 @@ func (fr *FrameReader) ReadFrame() (Frame, error) {
 	dataLen := binary.BigEndian.Uint16(header[2:4])
 
 	if dataLen > FrameMaxDataLen {
-		return Frame{}, fmt.Errorf("data length %d exceeds max %d", dataLen, FrameMaxDataLen)
+		return Frame{}, nil, fmt.Errorf("data length %d exceeds max %d", dataLen, FrameMaxDataLen)
 	}
 
 	// Read data + CRC
 	rest := make([]byte, int(dataLen)+1) // +1 for CRC
 	if _, err := io.ReadFull(fr.rd, rest); err != nil {
-		return Frame{}, fmt.Errorf("read data+crc: %w", err)
+		return Frame{}, nil, fmt.Errorf("read data+crc: %w", err)
 	}
 
 	// Reconstruct the full frame for CRC verification
@@ -312,5 +344,6 @@ func (fr *FrameReader) ReadFrame() (Frame, error) {
 	copy(full[5:5+dataLen], rest[:dataLen])
 	full[total-1] = rest[dataLen]
 
-	return DecodeFrame(full)
+	f, err := DecodeFrame(full)
+	return f, full, err
 }

@@ -9,6 +9,9 @@ import (
 //
 //	$ | Addr+Spec(1) | Cmd(1) | DataLen(2, big-endian) | Data(DataLen) | CRC(1)
 //
+// Addr+Spec distinguishes the message direction and purpose.
+// Command number is always 0x65 for the handshake protocol.
+//
 // Minimum frame: 6 bytes ($ + addr + cmd + len[2] + 0 data + crc)
 const (
 	FramePreamble   = '$'
@@ -16,19 +19,24 @@ const (
 	FrameMaxDataLen = 1024
 	FrameMaxLen     = FrameMinLen + FrameMaxDataLen
 
-	// Address byte: upper nibble = source, lower nibble = flags
-	AddrServer = 0x10
-	AddrDevice = 0x20
-)
+	// Address + Specifier constants as per the ROS–APCS protocol.
+	AddrDeviceHello    = 0x60 // Device → Server: request challenge (hello)
+	AddrServerChallenge = 0x61 // Server → Device: challenge response
+	AddrDeviceAuth     = 0x62 // Device → Server: authorization request (signature)
+	AddrServerResult   = 0x63 // Server → Device: authorization result
 
-// Commands for the crypto handshake protocol.
-const (
-	CmdHello     byte = 0x01 // Device → Server: device ID (requests challenge)
-	CmdChallenge byte = 0x02 // Server → Device: 8 random bytes + 8 byte timestamp
-	CmdResponse  byte = 0x03 // Device → Server: device ID + RSA signature
-	CmdSuccess   byte = 0x04 // Server → Device: authentication succeeded
-	CmdDenied    byte = 0x05 // Server → Device: authentication denied
-	CmdMessage   byte = 0x06 // Device → Server: post-handshake message
+	// CmdAuth is the command number for all handshake messages.
+	CmdAuth byte = 0x65
+
+	// Result codes (server → device authorization result).
+	ResultAuthorized       byte = 0x01
+	ResultDecodeError      byte = 0x02
+	ResultSpecError        byte = 0x03
+	ResultIntegrityError   byte = 0x07
+	ResultAuthError        byte = 0x0A
+
+	// Fixed field sizes.
+	DeviceIDSize = 10 // Device ID is exactly 10 bytes
 )
 
 // Frame represents a parsed binary frame.

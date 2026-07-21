@@ -1,5 +1,7 @@
 // challenge_client is a test client for the crypto handshake TCP server.
 //
+// Protocol: ROS MP ↔ APCS Communication Module
+//
 // Usage:
 //
 //	go run ./cmd/challenge_client <device_id> [private_key.pem]
@@ -7,22 +9,13 @@
 // If no private key file is provided, the built-in stub key is used (matching
 // public key must be registered on the server for this device).
 //
-// Generate your own key pair with OpenSSL:
-//
-//	openssl genpkey -algorithm RSA -out private_key.pem -pkeyopt rsa_keygen_bits:2048
-//	openssl rsa -pubout -in private_key.pem -out public_key.pem
-//
-// Register the public key (see cmd/keygen), then connect:
-//
-//	go run ./cmd/challenge_client 37777 private_key.pem
-//
 // The client:
 //  1. Connects to the crypto TCP server (default :9001)
-//  2. Sends a Hello frame with the device ID
-//  3. Receives a Challenge frame (8 random + 8 timestamp bytes)
-//  4. Signs the challenge with the private key (RSA PKCS#1 v1.5 SHA-256)
-//  5. Sends a Response frame with the device ID + signature
-//  6. Receives Success or Denied
+//  2. Sends Hello (Addr=0x60, Cmd=0x65, 10-byte device ID)
+//  3. Receives Challenge (Addr=0x61, Cmd=0x65, 8B time + 8B key)
+//  4. Signs the challenge (RSA PKCS#1 v1.5 SHA-256)
+//  5. Sends Auth request (Addr=0x62, Cmd=0x65, 10B ID + 256B signature)
+//  6. Receives Result (Addr=0x63, Cmd=0x65, 10B ID + 1B code)
 package main
 
 import (
@@ -46,19 +39,19 @@ const (
 	frameMinLen     = 6
 	frameMaxDataLen = 1024
 
-	addrDevice = 0x20
+	addrDeviceHello  = 0x60
+	addrServerChal   = 0x61
+	addrDeviceAuth   = 0x62
+	addrServerResult = 0x63
 
-	cmdHello     byte = 0x01
-	cmdChallenge byte = 0x02
-	cmdResponse  byte = 0x03
-	cmdSuccess   byte = 0x04
-	cmdDenied    byte = 0x05
-	cmdMessage   byte = 0x06
+	cmdAuth     byte = 0x65
+	deviceIDLen      = 10
+
+	resultAuthorized byte = 0x01
 )
 
 // stubPrivateKey is a pre-generated RSA 2048-bit key used when no key file is
-// provided.  The matching public key is in _stub_public.pem.  Generate your
-// own key pair with OpenSSL for production use.
+// provided.  The matching public key is in _stub_public.pem.
 const stubPrivateKey = `-----BEGIN PRIVATE KEY-----
 MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC+8u4ZzpfSfqlf
 pLRxc52iWlFVIsDAZ2q9WSeipu4ib+jS3qWB/GX+FnKu6WuY11SdAYPcToCTwVON
@@ -100,7 +93,7 @@ func main() {
 		addr = "localhost:9001"
 	}
 
-	// --- Load private key (file or built-in stub) ---
+	// --- Load private key ---
 	var privKey *rsa.PrivateKey
 	if len(os.Args) >= 3 {
 		pemData, err := os.ReadFile(os.Args[2])
@@ -135,33 +128,31 @@ func main() {
 
 	reader := bufio.NewReader(conn)
 
-	// === Step 1: Send Hello ===
-	fmt.Printf("[client] sending hello for device %q\n", deviceID)
-	helloFrame := encodeFrame(addrDevice, cmdHello, []byte(deviceID))
+	// === Step 1: Send Hello (Addr=0x60, Cmd=0x65, 10B ID) ===
+	idPadded := padID(deviceID)
+	fmt.Printf("[client] sending hello: Addr=0x60 Cmd=0x65 ID=%q (padded=%d bytes)\n", deviceID, len(idPadded))
+	helloFrame := encodeFrame(addrDeviceHello, cmdAuth, idPadded)
 	if _, err := conn.Write(helloFrame); err != nil {
 		fmt.Fprintf(os.Stderr, "send hello: %v\n", err)
 		os.Exit(1)
 	}
 
-	// === Step 2: Receive Challenge ===
+	// === Step 2: Receive Challenge (Addr=0x61, Cmd=0x65) ===
 	conn.SetReadDeadline(time.Now().Add(15 * time.Second))
 	challengeFrame, err := readFrame(reader)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "read challenge: %v\n", err)
 		os.Exit(1)
 	}
-	if challengeFrame.cmd == cmdDenied {
-		fmt.Printf("[client] DENIED: %s\n", string(challengeFrame.data))
-		os.Exit(1)
-	}
-	if challengeFrame.cmd != cmdChallenge {
-		fmt.Fprintf(os.Stderr, "expected challenge (0x%02x), got 0x%02x\n", cmdChallenge, challengeFrame.cmd)
+	if challengeFrame.addr != addrServerChal || challengeFrame.cmd != cmdAuth {
+		fmt.Fprintf(os.Stderr, "expected Addr=0x61 Cmd=0x65, got Addr=0x%02x Cmd=0x%02x\n",
+			challengeFrame.addr, challengeFrame.cmd)
 		os.Exit(1)
 	}
 
 	challenge := challengeFrame.data
-	fmt.Printf("[client] received challenge: %d bytes (nonce=%x ts=%d)\n",
-		len(challenge), challenge[:8], binary.BigEndian.Uint64(challenge[8:]))
+	fmt.Printf("[client] received challenge: %d bytes (time=%x key=%x)\n",
+		len(challenge), challenge[:8], challenge[8:])
 
 	// === Step 3: Sign challenge ===
 	signature, err := signChallenge(privKey, challenge)
@@ -171,53 +162,59 @@ func main() {
 	}
 	fmt.Printf("[client] signed challenge: signature=%d bytes\n", len(signature))
 
-	// === Step 4: Send Response ===
-	// Format: [2 bytes ID length] [deviceID] [signature]
-	idBytes := []byte(deviceID)
-	respData := make([]byte, 2+len(idBytes)+len(signature))
-	binary.BigEndian.PutUint16(respData[:2], uint16(len(idBytes)))
-	copy(respData[2:2+len(idBytes)], idBytes)
-	copy(respData[2+len(idBytes):], signature)
+	// === Step 4: Send Auth request (Addr=0x62, Cmd=0x65, 10B ID + 256B sig) ===
+	authData := make([]byte, deviceIDLen+len(signature))
+	copy(authData[:deviceIDLen], idPadded)
+	copy(authData[deviceIDLen:], signature)
 
-	fmt.Printf("[client] sending response (data=%d bytes)\n", len(respData))
-	respFrame := encodeFrame(addrDevice, cmdResponse, respData)
-	if _, err := conn.Write(respFrame); err != nil {
-		fmt.Fprintf(os.Stderr, "send response: %v\n", err)
+	fmt.Printf("[client] sending auth request (data=%d bytes)\n", len(authData))
+	authFrame := encodeFrame(addrDeviceAuth, cmdAuth, authData)
+	if _, err := conn.Write(authFrame); err != nil {
+		fmt.Fprintf(os.Stderr, "send auth: %v\n", err)
 		os.Exit(1)
 	}
 
-	// === Step 5: Receive result ===
+	// === Step 5: Receive Result (Addr=0x63, Cmd=0x65, 10B ID + 1B code) ===
 	conn.SetReadDeadline(time.Now().Add(15 * time.Second))
 	resultFrame, err := readFrame(reader)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "read result: %v\n", err)
 		os.Exit(1)
 	}
-
-	switch resultFrame.cmd {
-	case cmdSuccess:
-		fmt.Printf("[client] SUCCESS: %s\n", string(resultFrame.data))
-	case cmdDenied:
-		fmt.Printf("[client] DENIED: %s\n", string(resultFrame.data))
+	if resultFrame.addr != addrServerResult || resultFrame.cmd != cmdAuth {
+		fmt.Fprintf(os.Stderr, "expected Addr=0x63 Cmd=0x65, got Addr=0x%02x Cmd=0x%02x\n",
+			resultFrame.addr, resultFrame.cmd)
 		os.Exit(1)
+	}
+
+	if len(resultFrame.data) < 1 {
+		fmt.Fprintf(os.Stderr, "result too short\n")
+		os.Exit(1)
+	}
+	resultCode := resultFrame.data[len(resultFrame.data)-1]
+	resultID := string(resultFrame.data[:len(resultFrame.data)-1])
+
+	switch resultCode {
+	case resultAuthorized:
+		fmt.Printf("[client] AUTHORIZED (code=0x%02x) device=%q\n", resultCode, resultID)
 	default:
-		fmt.Fprintf(os.Stderr, "unexpected response: cmd=0x%02x data=%s\n", resultFrame.cmd, string(resultFrame.data))
+		fmt.Printf("[client] DENIED (code=0x%02x) device=%q data=%x\n", resultCode, resultID, resultFrame.data)
 		os.Exit(1)
 	}
 
 	// === Step 6: Loop — wait for Enter, send message ===
 	stdin := bufio.NewReader(os.Stdin)
-	msgData := []byte("$7052000000000000000001111")
 	for {
-		fmt.Print("[client] Press Enter to send (Ctrl+C to exit)...")
+		fmt.Print("[client] Press Enter to send message (Ctrl+C to exit)...")
 		_, err := stdin.ReadString('\n')
 		if err != nil {
-			fmt.Printf("\n[client] input closed (%v), exiting loop\n", err)
+			fmt.Printf("\n[client] input closed (%v), exiting\n", err)
 			break
 		}
 
-		msgFrame := encodeFrame(addrDevice, cmdMessage, msgData)
-		fmt.Printf("[client] sending message frame: %q (frame=%d bytes)\n", string(msgData), len(msgFrame))
+		msgData := []byte("$7052000000000000000001111")
+		msgFrame := encodeFrame(addrDeviceAuth, cmdAuth, msgData)
+		fmt.Printf("[client] sending: %q (frame=%d bytes)\n", string(msgData), len(msgFrame))
 		if _, err := conn.Write(msgFrame); err != nil {
 			fmt.Fprintf(os.Stderr, "send message: %v\n", err)
 			break
@@ -226,7 +223,13 @@ func main() {
 	fmt.Println("[client] done, closing connection")
 }
 
-// ---- frame helpers (duplicated for standalone client) ----
+func padID(id string) []byte {
+	buf := make([]byte, deviceIDLen)
+	copy(buf, id)
+	return buf
+}
+
+// ---- frame helpers ----
 
 type rawFrame struct {
 	addr byte
@@ -263,7 +266,6 @@ func encodeFrame(addr, cmd byte, data []byte) []byte {
 }
 
 func readFrame(rd *bufio.Reader) (rawFrame, error) {
-	// Scan for preamble
 	for {
 		b, err := rd.ReadByte()
 		if err != nil {
@@ -274,7 +276,6 @@ func readFrame(rd *bufio.Reader) (rawFrame, error) {
 		}
 	}
 
-	// Read header: addr + cmd + len(2)
 	header := make([]byte, 4)
 	if _, err := io.ReadFull(rd, header); err != nil {
 		return rawFrame{}, fmt.Errorf("read header: %w", err)
@@ -288,13 +289,11 @@ func readFrame(rd *bufio.Reader) (rawFrame, error) {
 		return rawFrame{}, fmt.Errorf("data length too large: %d", dataLen)
 	}
 
-	// Read data + CRC
 	rest := make([]byte, int(dataLen)+1)
 	if _, err := io.ReadFull(rd, rest); err != nil {
 		return rawFrame{}, fmt.Errorf("read data+crc: %w", err)
 	}
 
-	// Reconstruct for CRC check
 	total := frameMinLen + int(dataLen)
 	full := make([]byte, total)
 	full[0] = framePreamble

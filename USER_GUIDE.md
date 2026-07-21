@@ -68,6 +68,59 @@ go run ./cmd/challenge_client 37777
 
 The client performs the handshake, then waits for **Enter** to send test messages. Press **Ctrl+C** to exit.
 
+## Protocol
+
+Binary frame format for device↔server communication:
+
+```
+$ | Addr+Spec(1) | Cmd(1) | DataLen(2, BE) | Data(N) | CRC(1)
+```
+
+| Field      | Size   | Description                          |
+|------------|--------|--------------------------------------|
+| Preamble   | 1 byte | `$` (0x24)                           |
+| Addr+Spec  | 1 byte | `0x60`=hello `0x61`=challenge `0x62`=auth `0x63`=result |
+| Command    | 1 byte | Always `0x65` for handshake          |
+| DataLen    | 2 bytes| Payload length, big-endian, max 1024 |
+| Data       | N bytes| Payload                              |
+| CRC        | 1 byte | XOR of bytes from Addr through Data  |
+
+### Handshake flow
+
+All messages use Cmd=0x65. Addr+Spec distinguishes message purpose.
+
+```
+Device                              Server
+  │                                   │
+  │── Hello ────────────────────────→│  Addr=0x60 Cmd=0x65
+  │   [10 bytes: Device ID]          │  padded with 0x00
+  │                                   │
+  │←─ Challenge ─────────────────────│  Addr=0x61 Cmd=0x65
+  │   [8B time + 8B random key]      │  16 bytes total
+  │                                   │
+  │── Auth Request ─────────────────→│  Addr=0x62 Cmd=0x65
+  │   [10B ID + 256B RSA signature]  │  266 bytes total
+  │                                   │
+  │←─ Result ────────────────────────│  Addr=0x63 Cmd=0x65
+  │   [10B ID + 1B result code]      │  11 bytes total
+```
+
+### Result codes
+
+| Code   | Meaning                             |
+|--------|-------------------------------------|
+| `0x01` | Authorized                          |
+| `0x02` | Error decoding data field           |
+| `0x03` | Error combining specifier + number  |
+| `0x07` | Integrity error (CRC)               |
+| `0x0A` | Authorization error                 |
+
+### Challenge
+
+- 8-byte Unix timestamp (uint64, big-endian) + 8 random bytes = 16 bytes total
+- Valid for 5 minutes (TTL checked via embedded timestamp)
+- Signed with RSA-2048 PKCS#1 v1.5 + SHA-256
+
 ## Configuration
 
 | Variable              | Default     | Description          |
