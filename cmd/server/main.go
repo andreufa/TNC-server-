@@ -12,7 +12,6 @@ import (
 
 	"tnc-server/internal/config"
 	"tnc-server/internal/db"
-	"tnc-server/internal/hub"
 	"tnc-server/internal/store"
 	"tnc-server/internal/tcp"
 	"tnc-server/internal/web"
@@ -65,18 +64,8 @@ func run() error {
 		}
 	}()
 
-	// --- hub ---
-	h := hub.New()
-	go h.Run()
-	defer h.Stop()
-
 	// --- log channel ---
 	logChan := make(chan string, 1000)
-
-	// --- TCP server (JSON/broadcast) ---
-	tcpSrv := tcp.NewServer(cfg.TCPAddr, devices, h, logChan)
-	tcpErr := make(chan error, 1)
-	go func() { tcpErr <- tcpSrv.ListenAndServe() }()
 
 	// --- Crypto TCP server ---
 	cryptoSrv := tcp.NewCryptoServer(cfg.CryptoTCPAddr, devices, logChan)
@@ -105,10 +94,6 @@ func run() error {
 	select {
 	case <-stop:
 		log.Print("shutdown: signal received")
-	case err := <-tcpErr:
-		if err != nil {
-			log.Printf("tcp: server error: %v", err)
-		}
 	case err := <-cryptoErr:
 		if err != nil {
 			log.Printf("crypto-tcp: server error: %v", err)
@@ -127,7 +112,6 @@ func run() error {
 		log.Printf("http: shutdown error: %v", err)
 	}
 
-	tcpSrv.Shutdown()
 	cryptoSrv.Shutdown()
 	close(logChan)
 

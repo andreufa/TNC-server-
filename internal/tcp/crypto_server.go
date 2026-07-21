@@ -215,6 +215,28 @@ func (s *CryptoServer) handleConnection(conn net.Conn) {
 
 	log.Printf("crypto-tcp: [%s] handshake complete for %q", remote, deviceID)
 	s.logEvent("auth", deviceID, "handshake complete")
+
+	// === Post-handshake: read loop ===
+	for {
+		conn.SetReadDeadline(time.Now().Add(5 * time.Minute))
+		fr, err := frameReader.ReadFrame()
+		if err != nil {
+			if errNet, ok := err.(net.Error); ok && errNet.Timeout() {
+				log.Printf("crypto-tcp: [%s] idle timeout for %q", remote, deviceID)
+				s.logEvent("disconnect", deviceID, "idle timeout")
+			} else {
+				log.Printf("crypto-tcp: [%s] read error for %q: %v", remote, deviceID, err)
+				s.logEvent("disconnect", deviceID, fmt.Sprintf("disconnected: %v", err))
+			}
+			return
+		}
+		log.Printf("crypto-tcp: [%s] message from %q: cmd=0x%02x data=%x", remote, deviceID, fr.Cmd, fr.Data)
+		s.logEvent("message", deviceID, fmt.Sprintf("cmd=0x%02x data=%x", fr.Cmd, fr.Data))
+
+		if err := s.devices.UpdateLastSeen(context.Background(), deviceID); err != nil {
+			log.Printf("crypto-tcp: [%s] update last seen for %q: %v", remote, deviceID, err)
+		}
+	}
 }
 
 func (s *CryptoServer) sendDenied(conn net.Conn, reason string) {

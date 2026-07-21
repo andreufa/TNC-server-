@@ -28,6 +28,7 @@ const (
 	CmdResponse  byte = 0x03 // Device → Server: device ID + RSA signature
 	CmdSuccess   byte = 0x04 // Server → Device: authentication succeeded
 	CmdDenied    byte = 0x05 // Server → Device: authentication denied
+	CmdMessage   byte = 0x06 // Device → Server: post-handshake message
 )
 
 // Frame represents a parsed binary frame.

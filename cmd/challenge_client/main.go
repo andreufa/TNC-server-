@@ -53,6 +53,7 @@ const (
 	cmdResponse  byte = 0x03
 	cmdSuccess   byte = 0x04
 	cmdDenied    byte = 0x05
+	cmdMessage   byte = 0x06
 )
 
 // stubPrivateKey is a pre-generated RSA 2048-bit key used when no key file is
@@ -203,6 +204,26 @@ func main() {
 		fmt.Fprintf(os.Stderr, "unexpected response: cmd=0x%02x data=%s\n", resultFrame.cmd, string(resultFrame.data))
 		os.Exit(1)
 	}
+
+	// === Step 6: Loop — wait for Enter, send message ===
+	stdin := bufio.NewReader(os.Stdin)
+	msgData := []byte("$7052000000000000000001111")
+	for {
+		fmt.Print("[client] Press Enter to send (Ctrl+C to exit)...")
+		_, err := stdin.ReadString('\n')
+		if err != nil {
+			fmt.Printf("\n[client] input closed (%v), exiting loop\n", err)
+			break
+		}
+
+		msgFrame := encodeFrame(addrDevice, cmdMessage, msgData)
+		fmt.Printf("[client] sending message frame: %q (frame=%d bytes)\n", string(msgData), len(msgFrame))
+		if _, err := conn.Write(msgFrame); err != nil {
+			fmt.Fprintf(os.Stderr, "send message: %v\n", err)
+			break
+		}
+	}
+	fmt.Println("[client] done, closing connection")
 }
 
 // ---- frame helpers (duplicated for standalone client) ----
