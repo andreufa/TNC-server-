@@ -1,16 +1,19 @@
 {{define "devices.html"}}
 {{template "top" .}}
-{{$priv := eq (printf "%s" .User.Role) "privileged"}}
+
+{{/* Проверяем права */}}
+{{$canManage := or (eq (printf "%s" .User.Role) "privileged") (eq (printf "%s" .User.Role) "admin")}}
+
 <h1>Устройства</h1>
 {{if .Flash}}<div class="flash">{{.Flash}}</div>{{end}}
 
-{{if $priv}}
+{{if $canManage}}
 <div class="card">
   <h3>Добавить устройство</h3>
   <form method="post" action="/devices/add" class="row">
     <input name="id" placeholder="Device ID" required>
     <input name="password" type="text" placeholder="Пароль" required>
-    <label class="chk"><input type="checkbox" name="in_service"> В обслуживании</label>
+    <label class="chk"><input type="checkbox" name="in_service"> В эксплуатацию</label>
     <button class="primary" type="submit">Добавить</button>
   </form>
 </div>
@@ -20,55 +23,90 @@
   <thead>
     <tr>
       <th>ID</th>
-      <th>Статус</th>
+      <th>Статус эксплуатации</th>
+      <th>Статус подключения</th>
+      <th>Последнее подключение</th>
       <th>Зарегистрировано</th>
-      {{if $priv}}<th>Действия</th>{{end}}
+      {{if $canManage}}<th>Действия</th>{{end}}
     </tr>
   </thead>
   <tbody>
     {{range .Devices}}
     <tr>
       <td><strong>{{.ID}}</strong></td>
+
+      <!-- Статус эксплуатации -->
       <td>
-        {{if .InService}}<span class="badge on">Эксплуатация</span>
-        {{else}}<span class="badge off">Отключено</span>{{end}}
+        {{if .InService}}
+          <span style="color: #28a745;">Эксплуатация</span>
+        {{else}}
+          <span style="color: #6c757d;">Отключено</span>
+        {{end}}
       </td>
-      <td>{{.RegisteredAt.Format "2006-01-02 15:04"}}</td>
-      {{if $priv}}
+
+      <!-- Статус подключения (онлайн/офлайн) -->
       <td>
-        <div class="row">
+        {{if .IsOnline}}
+          <span style="background-color: #28a745; color: white; padding: 4px 12px; border-radius: 4px; font-weight: bold; display: inline-block;">
+            В сети
+          </span>
+        {{else}}
+          <span style="background-color: #6c757d; color: white; padding: 4px 12px; border-radius: 4px; font-weight: bold; display: inline-block;">
+            Не в сети
+          </span>
+        {{end}}
+      </td>
+
+      <!-- Время последнего подключения (для отладки) -->
+      <td>
+        {{if .LastSeenAt}}
+          {{.LastSeenAt.Format "2006-01-02 15:04:05"}}
+        {{else}}
+          —
+        {{end}}
+      </td>
+
+      <td>{{.RegisteredAt.Format "2006-01-02 15:04"}}</td>
+
+      {{if $canManage}}
+      <td>
+        <div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center;">
+          <!-- Переключить эксплуатацию -->
           {{if .InService}}
-          <form class="inline" method="post" action="/devices/{{.ID}}/service">
-            <input type="hidden" name="in_service" value="false">
-            <button type="submit">Деактивировать</button>
-          </form>
+            <form style="display: inline; margin: 0;" method="post" action="/devices/{{.ID}}/service">
+              <input type="hidden" name="in_service" value="false">
+              <button type="submit" class="btn btn-sm btn-outline-secondary">Снять с эксплуатации</button>
+            </form>
           {{else}}
-          <form class="inline" method="post" action="/devices/{{.ID}}/service">
-            <input type="hidden" name="in_service" value="true">
-            <button type="submit">Активировать</button>
-          </form>
+            <form style="display: inline; margin: 0;" method="post" action="/devices/{{.ID}}/service">
+              <input type="hidden" name="in_service" value="true">
+              <button type="submit" class="btn btn-sm btn-outline-success">В эксплуатацию</button>
+            </form>
           {{end}}
 
-          <form class="inline row" method="post" action="/devices/{{.ID}}/password">
-            <input name="password" type="text" placeholder="Новый пароль" required>
-            <button type="submit">Сменить пароль</button>
+          <!-- Сменить пароль -->
+          <form style="display: inline-flex; gap: 4px; margin: 0; align-items: center;" method="post" action="/devices/{{.ID}}/password">
+            <input name="password" type="password" placeholder="Новый пароль" required style="width:120px;">
+            <button type="submit" class="btn btn-sm btn-warning">Сменить пароль</button>
           </form>
 
-          <form class="inline row" method="post" action="/devices/{{.ID}}/rename">
-            <input name="new_id" placeholder="Новый ID" required>
-            <button type="submit">Сменить ID</button>
+          <!-- Сменить ID -->
+          <form style="display: inline-flex; gap: 4px; margin: 0; align-items: center;" method="post" action="/devices/{{.ID}}/rename">
+            <input name="new_id" placeholder="Новый ID" required style="width:120px;">
+            <button type="submit" class="btn btn-sm btn-info">Сменить ID</button>
           </form>
 
-          <form class="inline" method="post" action="/devices/{{.ID}}/delete"
+          <!-- Удалить -->
+          <form style="display: inline; margin: 0;" method="post" action="/devices/{{.ID}}/delete"
                 onsubmit="return confirm('Удалить устройство {{.ID}}?');">
-            <button class="danger" type="submit">Удалить</button>
+            <button class="btn btn-sm btn-danger" type="submit">Удалить</button>
           </form>
         </div>
       </td>
       {{end}}
     </tr>
     {{else}}
-    <tr><td colspan="{{if $priv}}4{{else}}3{{end}}">Нет устройств</td></tr>
+    <tr><td colspan="{{if $canManage}}6{{else}}5{{end}}">Нет устройств</td></tr>
     {{end}}
   </tbody>
 </table>

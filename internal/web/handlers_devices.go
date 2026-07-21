@@ -2,6 +2,7 @@ package web
 
 import (
 	"errors"
+	"log"
 	"net/http"
 
 	"tnc-server/internal/store"
@@ -31,6 +32,13 @@ func (s *Server) handleDeviceAdd(w http.ResponseWriter, r *http.Request) {
 
 	// Получаем текущего пользователя из контекста
 	user := userFrom(r.Context())
+	// Логгируем проблемы с админом
+	if user == nil {
+		log.Println("⚠️ handleDeviceAdd: no user in context")
+	} else {
+		log.Printf("✅ handleDeviceAdd: user=%s, role=%s, IsAdmin=%v", user.Username, user.Role, user.Role.IsAdmin())
+	}
+	//
 	if user == nil {
 		http.Redirect(w, r, "/?flash=Не+авторизован", http.StatusSeeOther)
 		return
@@ -85,6 +93,13 @@ func (s *Server) handleDevicePassword(w http.ResponseWriter, r *http.Request) {
 	}
 
 	user := userFrom(r.Context())
+	// Логгируем проблемы с админом
+	if user == nil {
+		log.Println("⚠️ handleDeviceAdd: no user in context")
+	} else {
+		log.Printf("✅ handleDeviceAdd: user=%s, role=%s, IsAdmin=%v", user.Username, user.Role, user.Role.IsAdmin())
+	}
+	//
 	if user == nil {
 		http.Redirect(w, r, "/?flash=Не+авторизован", http.StatusSeeOther)
 		return

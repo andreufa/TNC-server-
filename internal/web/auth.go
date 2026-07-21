@@ -37,6 +37,30 @@ func (s *Server) withUser(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 	})
 }
+func requireRoleOrAdmin(allowedRole models.Role, next http.HandlerFunc) http.HandlerFunc {
+	return requireAuth(func(w http.ResponseWriter, r *http.Request) {
+		u := userFrom(r.Context())
+		if u == nil {
+			// Если не залогинен — на логин
+			http.Redirect(w, r, "/login", http.StatusSeeOther)
+			return
+		}
+
+		// ГЛАВНОЕ ПРАВИЛО: доступ есть, если роль совпадает ИЛИ если это админ
+		isAllowed := u.Role == allowedRole || u.Role.IsAdmin()
+
+		log.Printf("🔐 requireRoleOrAdmin: user=%s, role=%s, isAdmin=%v, allowed=%v",
+			u.Username, u.Role, u.Role.IsAdmin(), isAllowed)
+
+		if !isAllowed {
+			log.Printf("❌ requireRoleOrAdmin: access denied for user '%s'", u.Username)
+			http.Redirect(w, r, "/?flash=Недостаточно+прав", http.StatusSeeOther)
+			return
+		}
+
+		next(w, r)
+	})
+}
 
 // requireAuth redirects to /login if there is no authenticated user.
 func requireAuth(next http.HandlerFunc) http.HandlerFunc {
@@ -47,22 +71,6 @@ func requireAuth(next http.HandlerFunc) http.HandlerFunc {
 		}
 		next(w, r)
 	}
-}
-
-// requireRole enforces that the authenticated user has the given role.
-func requireRole(role models.Role, next http.HandlerFunc) http.HandlerFunc {
-	return requireAuth(func(w http.ResponseWriter, r *http.Request) {
-		u := userFrom(r.Context())
-		if u == nil {
-			http.Redirect(w, r, "/login", http.StatusSeeOther)
-			return
-		}
-		if u.Role != role {
-			http.Error(w, "forbidden", http.StatusForbidden)
-			return
-		}
-		next(w, r)
-	})
 }
 
 // requireAdmin проверяет, что пользователь авторизован и имеет роль admin

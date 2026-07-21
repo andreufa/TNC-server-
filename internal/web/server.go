@@ -44,29 +44,30 @@ func NewServer(devices *store.DeviceStore, users *store.UserStore, sessions *sto
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
-	// Auth
+	// --- Auth routes (доступны всем, без дополнительных проверок) ---
 	mux.HandleFunc("GET /login", s.handleLoginForm)
 	mux.HandleFunc("POST /login", s.handleLogin)
 	mux.HandleFunc("POST /logout", s.handleLogout)
 
-	// Devices — viewing is allowed for any authenticated user.
-	mux.HandleFunc("GET /", requireAuth(s.handleDeviceList))
+	// --- Обычные пользователи (просмотр) ---
+	// Доступ есть у любого авторизованного пользователя
+	mux.HandleFunc("GET /", requireAuth(s.handleDeviceList))    // список устройств
+	mux.HandleFunc("GET /logs", requireAuth(s.handleLogsPage))  // список логов
+	mux.HandleFunc("GET /logs/ws", requireAuth(s.handleLogsWS)) // WebSocket логов
 
-	// Devices — mutations require the privileged role.
-	mux.HandleFunc("POST /devices/add", requireRole(models.RolePrivileged, s.handleDeviceAdd))
-	mux.HandleFunc("POST /devices/{id}/delete", requireRole(models.RolePrivileged, s.handleDeviceDelete))
-	mux.HandleFunc("POST /devices/{id}/service", requireRole(models.RolePrivileged, s.handleDeviceService))
-	mux.HandleFunc("POST /devices/{id}/password", requireRole(models.RolePrivileged, s.handleDevicePassword))
-	mux.HandleFunc("POST /devices/{id}/rename", requireRole(models.RolePrivileged, s.handleDeviceRename))
+	// --- Привилегированные (и админ тоже) ---
+	// Используем requireRoleOrAdmin: доступ, если role == privileged ИЛИ IsAdmin() == true
+	mux.HandleFunc("POST /devices/add", requireRoleOrAdmin(models.RolePrivileged, s.handleDeviceAdd))
+	mux.HandleFunc("POST /devices/{id}/delete", requireRoleOrAdmin(models.RolePrivileged, s.handleDeviceDelete))
+	mux.HandleFunc("POST /devices/{id}/service", requireRoleOrAdmin(models.RolePrivileged, s.handleDeviceService))
+	mux.HandleFunc("POST /devices/{id}/password", requireRoleOrAdmin(models.RolePrivileged, s.handleDevicePassword))
+	mux.HandleFunc("POST /devices/{id}/rename", requireRoleOrAdmin(models.RolePrivileged, s.handleDeviceRename))
 
-	// Users — ТОЛЬКО ДЛЯ ADMIN (изменено с RolePrivileged на Admin)
+	// --- Только Админ (всё, что выше + управление пользователями) ---
+	// Строгая проверка: только IsAdmin() == true
 	mux.HandleFunc("GET /users", requireAdmin(s.handleUserList))
 	mux.HandleFunc("POST /users/add", requireAdmin(s.handleUserAdd))
 	mux.HandleFunc("POST /users/{id}/delete", requireAdmin(s.handleUserDelete))
-
-	// Logs — viewing is allowed for any authenticated user.
-	mux.HandleFunc("GET /logs", requireAuth(s.handleLogsPage))
-	mux.HandleFunc("GET /logs/ws", requireAuth(s.handleLogsWS))
 
 	return s.withUser(mux)
 }

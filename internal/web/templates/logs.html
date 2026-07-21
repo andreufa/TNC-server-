@@ -1,13 +1,15 @@
 {{define "logs.html"}}
 {{template "top" .}}
+
 <h1>Системные логи</h1>
 
 <div class="card">
     <div style="margin-bottom: 10px;">
         <button onclick="clearLogs()">Очистить</button>
         <button onclick="toggleAutoScroll()">Автоскролл: включен</button>
-        <span id="logCount" style="margin-left: 10px; color: #666;">Подключено: 0 логов</span>
+        <span id="logCount" style="margin-left: 10px; color: #666;">Логов: 0</span>
     </div>
+
     <div id="logContainer" style="
         background: #1a202c;
         color: #e2e8f0;
@@ -17,23 +19,31 @@
         height: 500px;
         overflow-y: auto;
         border-radius: 6px;
-        white-space: pre-wrap;
-        word-wrap: break-word;
     ">
-        <div style="color: #68d391;">=== Системные логи (в реальном времени) ===</div>
+        <div style="color: #68d391; margin-bottom: 8px; font-weight: bold;">
+            === Системные логи (в реальном времени) ===
+        </div>
         <div style="color: #718096;">Ожидание подключения к серверу логов...</div>
     </div>
 </div>
 
 <style>
     .log-entry {
-        padding: 2px 0;
+        padding: 6px 0;
         border-bottom: 1px solid #2d3748;
+        /* Убираем flex, чтобы верстка была простой и предсказуемой */
     }
+
+    /* Первая строка - метаданные */
+    .log-meta-line {
+        margin-bottom: 4px;
+    }
+
     .log-time {
         color: #718096;
         margin-right: 10px;
     }
+
     .log-type {
         display: inline-block;
         padding: 0 8px;
@@ -42,14 +52,28 @@
         margin-right: 10px;
         font-size: 11px;
     }
+    
+    .log-device {
+        color: #f6ad55;
+    }
+
+    /* Цвета типов */
     .log-type-connect { background: #2f855a; color: #fff; }
     .log-type-disconnect { background: #9b2c2c; color: #fff; }
     .log-type-auth { background: #2b6cb0; color: #fff; }
     .log-type-message { background: #553c9a; color: #fff; }
     .log-type-handshake { background: #744210; color: #fff; }
-    .log-device { color: #f6ad55; }
-    .log-message { color: #e2e8f0; }
-    .log-json { color: #68d391; }
+    .log-type-system { background: #4a5568; color: #fff; }
+
+    /* Вторая строка - само сообщение */
+    .log-message-wrapper {
+        color: #e2e8f0;
+        word-wrap: break-word;
+        white-space: pre-wrap; /* Сохраняет переносы строк из JSON */
+        line-height: 1.4;
+        padding-left: 28px; /* Небольшой отступ, чтобы сообщение не прилипало к левому краю */
+        margin: 0;
+    }
 </style>
 
 <script>
@@ -62,74 +86,87 @@
     function connectWebSocket() {
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const wsUrl = `${protocol}//${window.location.host}/logs/ws`;
-        
+
         ws = new WebSocket(wsUrl);
-        
+
         ws.onopen = function() {
-            addLog('system', 'Система', 'Подключение к серверу логов установлено');
+            addLog('system', 'Система', 'Подключение к серверу логов установлено', new Date());
         };
-        
+
         ws.onmessage = function(event) {
             try {
                 const log = JSON.parse(event.data);
-                addLog(log.type, log.device_id, log.message, log.timestamp);
+                addLog(log.type, log.deviceId, log.message, log.timestamp);
             } catch (e) {
-                addLog('system', 'Ошибка', 'Не удалось распарсить лог: ' + event.data);
+                // Если сервер вдруг пришлёт не JSON, покажем как есть
+                addLog('system', 'Ошибка', 'Не удалось распарсить лог: ' + event.data, new Date());
             }
         };
-        
+
         ws.onclose = function() {
-            addLog('system', 'Система', 'Соединение с сервером логов потеряно. Переподключение через 3 секунды...');
+            addLog('system', 'Система', 'Соединение с сервером логов потеряно. Переподключение через 3 секунды...', new Date());
             setTimeout(connectWebSocket, 3000);
         };
-        
+
         ws.onerror = function(error) {
-            addLog('system', 'Ошибка', 'Ошибка WebSocket: ' + error);
+            addLog('system', 'Ошибка', 'Ошибка WebSocket: ' + error, new Date());
         };
     }
 
     function addLog(type, deviceId, message, timestamp) {
-        const time = timestamp || new Date().toLocaleTimeString('ru-RU');
-        
+        const time = timestamp ? new Date(timestamp).toLocaleTimeString('ru-RU') : new Date().toLocaleTimeString('ru-RU');
+
         const entry = document.createElement('div');
         entry.className = 'log-entry';
-        
-        const typeClass = {
+
+        // Маппинг типов
+        const typeClassMap = {
             'connect': 'log-type-connect',
-            'disconnect': 'log-type-disconnect', 
+            'disconnect': 'log-type-disconnect',
             'auth': 'log-type-auth',
             'message': 'log-type-message',
             'handshake': 'log-type-handshake',
-            'system': 'log-type-auth'
-        }[type] || 'log-type-auth';
-        
+            'system': 'log-type-system'
+        };
+        const typeClass = typeClassMap[type] || 'log-type-system';
+
         let typeLabel = type.charAt(0).toUpperCase() + type.slice(1);
-        if (type === 'message') {
-            typeLabel = 'MSG';
-        }
-        
+        if (type === 'message') typeLabel = 'MSG';
+
         let deviceDisplay = deviceId || '—';
         if (deviceDisplay.length > 20) {
             deviceDisplay = deviceDisplay.substring(0, 17) + '...';
         }
-        
-        entry.innerHTML = `
+
+        // Первая строка (метаданные)
+        const metaDiv = document.createElement('div');
+        metaDiv.className = 'log-meta-line';
+        metaDiv.innerHTML = `
             <span class="log-time">[${time}]</span>
             <span class="log-type ${typeClass}">${typeLabel}</span>
-            <span class="log-device">${deviceDisplay}</span>
-            <span class="log-message">${escapeHtml(message)}</span>
+            <span class="log-device">${escapeHtml(deviceDisplay)}</span>
         `;
-        
+
+        // Вторая строка (сообщение)
+        const msgDiv = document.createElement('div');
+        msgDiv.className = 'log-message-wrapper';
+        // Используем textContent для безопасности, но white-space: pre-wrap в CSS сохранит переносы строк
+        msgDiv.textContent = message;
+
+        entry.appendChild(metaDiv);
+        entry.appendChild(msgDiv);
+
         container.appendChild(entry);
         logCount++;
         logCountSpan.textContent = `Логов: ${logCount}`;
-        
+
         if (autoScroll) {
             container.scrollTop = container.scrollHeight;
         }
     }
 
     function escapeHtml(text) {
+        if (!text) return '';
         const div = document.createElement('div');
         div.textContent = text;
         return div.innerHTML;
@@ -139,7 +176,7 @@
         container.innerHTML = '';
         logCount = 0;
         logCountSpan.textContent = 'Логов: 0';
-        addLog('system', 'Система', 'Логи очищены');
+        addLog('system', 'Система', 'Логи очищены', new Date());
     }
 
     function toggleAutoScroll() {
@@ -148,11 +185,9 @@
         btn.textContent = `Автоскролл: ${autoScroll ? 'включен' : 'выключен'}`;
     }
 
-    // Подключаемся при загрузке страницы
     window.onload = function() {
         connectWebSocket();
-        
-        // Добавляем обработчик для обновления счетчика при скролле
+
         container.addEventListener('scroll', function() {
             const isAtBottom = container.scrollHeight - container.scrollTop <= container.clientHeight + 50;
             if (isAtBottom && !autoScroll) {
@@ -163,5 +198,6 @@
         });
     };
 </script>
+
 {{template "bottom" .}}
 {{end}}

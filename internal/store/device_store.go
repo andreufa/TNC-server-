@@ -15,6 +15,9 @@ import (
 	"tnc-server/internal/models"
 )
 
+// Константа для определения времени офлайн
+const OfflineThreshold = 30 * time.Second
+
 // ErrAuthFailed — единая ошибка для всех случаев неудачной верификации.
 // Клиент не должен знать, что именно пошло не так (нет устройства, не в сервисе, неверный пароль).
 var ErrAuthFailed = errors.New("authentication failed")
@@ -32,7 +35,18 @@ func NewDeviceStore(pool *pgxpool.Pool) *DeviceStore {
 // List returns devices. When includeDeleted is false, soft-deleted devices are
 // omitted. Ordered by id.
 func (s *DeviceStore) List(ctx context.Context, includeDeleted bool) ([]models.Device, error) {
-	q := `SELECT id, registered_at, deleted_at, in_service, updated_by, updated_at FROM devices`
+	q := `
+		SELECT
+			id,
+			registered_at,
+			deleted_at,
+			in_service,
+			updated_by,
+			updated_at,
+			last_seen_at,
+			(last_seen_at IS NOT NULL AND last_seen_at > NOW() - INTERVAL '` + OfflineThreshold.String() + `') AS is_online
+		FROM devices
+	`
 	if !includeDeleted {
 		q += ` WHERE deleted_at IS NULL`
 	}
@@ -47,7 +61,17 @@ func (s *DeviceStore) List(ctx context.Context, includeDeleted bool) ([]models.D
 	var out []models.Device
 	for rows.Next() {
 		var d models.Device
-		if err := rows.Scan(&d.ID, &d.RegisteredAt, &d.DeletedAt, &d.InService, &d.UpdatedBy, &d.UpdatedAt); err != nil {
+		// Важно: порядок полей должен точно совпадать с SELECT
+		if err := rows.Scan(
+			&d.ID,
+			&d.RegisteredAt,
+			&d.DeletedAt,
+			&d.InService,
+			&d.UpdatedBy,
+			&d.UpdatedAt,
+			&d.LastSeenAt,
+			&d.IsOnline, // <-- читаем вычисленное поле
+		); err != nil {
 			return nil, err
 		}
 		out = append(out, d)
@@ -145,6 +169,7 @@ func (s *DeviceStore) VerifyDevice(ctx context.Context, id, plainPassword string
 	log.Printf("[INFO] VerifyDevice: successful authentication: id=%q", id)
 	return true, nil
 }
+
 func (s *DeviceStore) execAffecting(ctx context.Context, sql string, args ...any) error {
 	tag, err := s.pool.Exec(ctx, sql, args...)
 	if err != nil {
@@ -154,4 +179,43 @@ func (s *DeviceStore) execAffecting(ctx context.Context, sql string, args ...any
 		return fmt.Errorf("device: %w", ErrNotFound)
 	}
 	return nil
+}
+
+func (s *DeviceStore) UpdateLastSeen(ctx context.Context, deviceID string) error {
+	tag, err := s.pool.Exec(ctx, `
+        UPDATE devices
+        SET last_seen_at = NOW()
+        WHERE id = $1 AND deleted_at IS NULL
+    `, deviceID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		log.Printf("[WARN] UpdateLastSeen: device not found or deleted: %s", deviceID)
+		return ErrNotFound
+	}
+	return nil
+}
+
+// Дополнительный метод для получения обновленного статуса
+func (s *DeviceStore) GetDeviceStatus(ctx context.Context, deviceID string) (bool, error) {
+	var isOnline bool
+	var lastSeenAt *time.Time
+
+	err := s.pool.QueryRow(ctx, `
+        SELECT 
+            last_seen_at,
+            (last_seen_at IS NOT NULL AND last_seen_at > NOW() - INTERVAL '`+OfflineThreshold.String()+`') AS is_online
+        FROM devices
+        WHERE id = $1 AND deleted_at IS NULL
+    `, deviceID).Scan(&lastSeenAt, &isOnline)
+
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, ErrNotFound
+	}
+	if err != nil {
+		return false, err
+	}
+
+	return isOnline, nil
 }

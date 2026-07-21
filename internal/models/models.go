@@ -42,6 +42,8 @@ type Device struct {
 	InService    bool
 	UpdatedBy    *uuid.UUID
 	UpdatedAt    time.Time
+	LastSeenAt   *time.Time
+	IsOnline     bool // вычисленный статус: онлайн/офлайн
 }
 
 // User is a web-form account.

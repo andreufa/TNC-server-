@@ -35,6 +35,11 @@ $token = "твой-personal-access-token"
 docker login registry.gitlab.com -u $username -p $token
 В PowerShell пароль не будет отображаться при вводе — это нормально. Если всё ок, увидишь Login Succeeded.
 
+$env:GITLAB_USERNAME="my-username"
+$env:GITLAB_TOKEN="glpat-xxxxxxxxxxxxxxxxxxxx"
+$env:GITLAB_TOKEN | docker login registry.gitlab.i-progress.tech -u $env:GITLAB_USERNAME --password-stdin
+
+
 Шаг 3. Правильная разметка (tag) образа под GitLab
 GitLab ожидает путь вида: registry.gitlab.com/<username>/<project>/<image>:<tag>.
 
@@ -146,3 +151,36 @@ docker compose -f .\createdb.yml -p db-only up
 docker compose logs -f server 
 
 docker compose config --services // покажет все сервисы запущенные docker-compose.yml 
+
+
+## Сборка образа локально
+
+Вариант 3A: docker save / docker load (без реестра)
+Локально:
+
+powershell
+docker build -t tnc-server:local .
+docker save -o tnc-server.tar tnc-server:local
+
+### Передаёшь tnc-server.tar на сервер (scp, sftp, rclone и т.п.).
+ scp -r .\tnc-server.tar tnc-prod:~/app/tnc-server
+tnc-server.tar
+
+### После этого на сервере распаковываем архив 
+~/app/tnc-server$ sudo docker load -i tnc-server.tar
+
+Проверить можно 
+a.bukreev@intelligence3:~/app/tnc-server$ sudo docker images | grep tnc-server
+tnc-server                                            local                 b37ff28a9031   About an hour ago   26.9MB
+
+
+### Дальше в docker-compose.yml
+
+services:
+  server:
+    image: tnc-server:local          # ← важно: именно этот тег
+    # build: .                      # ← если есть build, лучше закомментировать для теста
+
+### Копировать остальные файлы
+scp -i $env:USERPROFILE\.ssh\id_ed25519_tnc .\docker-compose.yml .\.env tnc-prod:/home/a.bukreev/app/tnc-server/
+
