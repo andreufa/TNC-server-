@@ -60,7 +60,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /devices/add", requireRoleOrAdmin(models.RolePrivileged, s.handleDeviceAdd))
 	mux.HandleFunc("POST /devices/{id}/delete", requireRoleOrAdmin(models.RolePrivileged, s.handleDeviceDelete))
 	mux.HandleFunc("POST /devices/{id}/service", requireRoleOrAdmin(models.RolePrivileged, s.handleDeviceService))
-	mux.HandleFunc("POST /devices/{id}/password", requireRoleOrAdmin(models.RolePrivileged, s.handleDevicePassword))
+	mux.HandleFunc("POST /devices/{id}/publickey", requireRoleOrAdmin(models.RolePrivileged, s.handleDevicePublicKey))
 	mux.HandleFunc("POST /devices/{id}/rename", requireRoleOrAdmin(models.RolePrivileged, s.handleDeviceRename))
 
 	// --- Только Админ (всё, что выше + управление пользователями) ---

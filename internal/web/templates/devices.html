@@ -84,10 +84,10 @@
             </form>
           {{end}}
 
-          <!-- Сменить пароль -->
-          <form style="display: inline-flex; gap: 4px; margin: 0; align-items: center;" method="post" action="/devices/{{.ID}}/password">
-            <input name="password" type="password" placeholder="Новый пароль" required style="width:120px;">
-            <button type="submit" class="btn btn-sm btn-warning">Сменить пароль</button>
+          <!-- Сменить публичный ключ -->
+          <form style="display: inline-flex; gap: 4px; margin: 0; align-items: center;" method="post" action="/devices/{{.ID}}/publickey">
+            <textarea name="public_key" placeholder="Новый публичный ключ (PEM)" required rows="2" style="width:200px;"></textarea>
+            <button type="submit" class="btn btn-sm btn-warning">Сменить ключ</button>
           </form>
 
           <!-- Сменить ID -->

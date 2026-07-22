@@ -95,6 +95,13 @@ func (s *DeviceStore) SetPassword(ctx context.Context, id, newPlain string, user
 		id, string(hash), userID)
 }
 
+func (s *DeviceStore) SetPublicKey(ctx context.Context, id, publicKey string, userID uuid.UUID) error {
+	return s.execAffecting(ctx,
+		`UPDATE devices SET public_key = $2, updated_by = $3, updated_at = now()
+		 WHERE id = $1 AND deleted_at IS NULL`,
+		id, publicKey, userID)
+}
+
 func (s *DeviceStore) Rename(ctx context.Context, oldID, newID string, userID uuid.UUID) error {
 	return s.execAffecting(ctx,
 		`UPDATE devices SET id = $2, updated_by = $3, updated_at = now()

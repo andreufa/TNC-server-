@@ -84,32 +84,25 @@ func (s *Server) handleDeviceService(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/?flash=Статус+обновлён", http.StatusSeeOther)
 }
 
-func (s *Server) handleDevicePassword(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleDevicePublicKey(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	newPass := r.FormValue("password")
-	if newPass == "" {
-		http.Redirect(w, r, "/?flash=Пароль+не+может+быть+пустым", http.StatusSeeOther)
+	publicKey := r.FormValue("public_key")
+	if publicKey == "" {
+		http.Redirect(w, r, "/?flash=Публичный+ключ+не+может+быть+пустым", http.StatusSeeOther)
 		return
 	}
 
 	user := userFrom(r.Context())
-	// Логгируем проблемы с админом
-	if user == nil {
-		log.Println("⚠️ handleDeviceAdd: no user in context")
-	} else {
-		log.Printf("✅ handleDeviceAdd: user=%s, role=%s, IsAdmin=%v", user.Username, user.Role, user.Role.IsAdmin())
-	}
-	//
 	if user == nil {
 		http.Redirect(w, r, "/?flash=Не+авторизован", http.StatusSeeOther)
 		return
 	}
 
-	if err := s.devices.SetPassword(r.Context(), id, newPass, user.ID); err != nil {
+	if err := s.devices.SetPublicKey(r.Context(), id, publicKey, user.ID); err != nil {
 		s.deviceActionResult(w, r, err)
 		return
 	}
-	http.Redirect(w, r, "/?flash=Пароль+изменён", http.StatusSeeOther)
+	http.Redirect(w, r, "/?flash=Публичный+ключ+изменён", http.StatusSeeOther)
 }
 
 func (s *Server) handleDeviceRename(w http.ResponseWriter, r *http.Request) {
