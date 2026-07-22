@@ -1,6 +1,7 @@
 package hub
 
 import (
+	"encoding/hex"
 	"log"
 	"sync/atomic"
 )
@@ -92,7 +93,7 @@ func (h *Hub) Unsubscribe(s *Subscriber) {
 // senderID. Pass 0 to deliver to everyone.
 func (h *Hub) Broadcast(data []byte, senderID uint64) {
 	log.Printf("hub: broadcasting from sender %d", senderID)
-	log.Printf("hub: msg (json) %s", string(data))
+	log.Printf("hub: msg %s", hex.EncodeToString(data))
 	select {
 	case h.broadcast <- message{data: data, sender: senderID}:
 	case <-h.quit:

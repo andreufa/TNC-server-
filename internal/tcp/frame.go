@@ -7,7 +7,7 @@ import (
 
 // Binary frame format for the crypto handshake protocol:
 //
-//	$ | Addr+Spec(1) | Cmd(1) | DataLen(2, big-endian) | Data(DataLen) | CRC(1)
+//	$ | Addr+Spec(1) | Cmd(1) | DataLen(2, little-endian) | Data(DataLen) | CRC(1)
 //
 // Addr+Spec distinguishes the message direction and purpose.
 // Command number is always 0x65 for the handshake protocol.
@@ -24,9 +24,12 @@ const (
 	AddrServerChallenge = 0x61 // Server → Device: challenge response
 	AddrDeviceAuth     = 0x62 // Device → Server: authorization request (signature)
 	AddrServerResult   = 0x63 // Server → Device: authorization result
+	AddrDeviceRegular  = 0x76 // Device → Server: regular data message
+	AddrBroadcast      = 0x70 // Server → Device: broadcast (modified addr)
 
 	// CmdAuth is the command number for all handshake messages.
-	CmdAuth byte = 0x65
+	CmdAuth    byte = 0x65
+	CmdRegular byte = 0x59 // Regular data message command number
 
 	// Result codes (server → device authorization result).
 	ResultAuthorized       byte = 0x01
@@ -58,12 +61,12 @@ func EncodeFrame(f Frame) []byte {
 	buf[0] = FramePreamble
 	buf[1] = f.Addr
 	buf[2] = f.Cmd
-	binary.BigEndian.PutUint16(buf[3:5], uint16(dataLen))
+	binary.LittleEndian.PutUint16(buf[3:5], uint16(dataLen))
 	if dataLen > 0 {
 		copy(buf[5:5+dataLen], f.Data)
 	}
-	// CRC over bytes 1..(total-2) (addr through end of data)
-	crc := crcCalc(buf[1 : total-1])
+	// CRC over bytes 0..(total-2) (preamble through end of data)
+	crc := crcCalc(buf[:total-1])
 	buf[total-1] = crc
 
 	return buf
@@ -78,7 +81,7 @@ func DecodeFrame(raw []byte) (Frame, error) {
 	if raw[0] != FramePreamble {
 		return Frame{}, fmt.Errorf("bad preamble: 0x%02x", raw[0])
 	}
-	dataLen := binary.BigEndian.Uint16(raw[3:5])
+	dataLen := binary.LittleEndian.Uint16(raw[3:5])
 	if int(dataLen) > FrameMaxDataLen {
 		return Frame{}, fmt.Errorf("data length too large: %d", dataLen)
 	}
@@ -87,8 +90,8 @@ func DecodeFrame(raw []byte) (Frame, error) {
 		return Frame{}, fmt.Errorf("frame length mismatch: got %d, expected %d", len(raw), expectedLen)
 	}
 
-	// Verify CRC: bytes 1..(expectedLen-2)
-	expectedCRC := crcCalc(raw[1 : expectedLen-1])
+	// Verify CRC: bytes 0..(expectedLen-2) (preamble through end of data)
+	expectedCRC := crcCalc(raw[:expectedLen-1])
 	actualCRC := raw[expectedLen-1]
 	if expectedCRC != actualCRC {
 		return Frame{}, fmt.Errorf("CRC mismatch: calc 0x%02x, got 0x%02x", expectedCRC, actualCRC)

@@ -44,8 +44,10 @@ const (
 	addrServerChal   = 0x61
 	addrDeviceAuth   = 0x62
 	addrServerResult = 0x63
+	addrRegular      = 0x76
 
 	cmdAuth     byte = 0x65
+	cmdRegular  byte = 0x59
 	deviceIDLen      = 10
 
 	resultAuthorized byte = 0x01
@@ -225,20 +227,28 @@ func main() {
 		}
 	}()
 
-	// === Step 7: Loop — wait for Enter, send message ===
-	stdin := bufio.NewReader(os.Stdin)
-	for {
-		fmt.Print("[client] Press Enter to send message (Ctrl+C to exit)...")
-		_, err := stdin.ReadString('\n')
-		if err != nil {
-			fmt.Printf("\n[client] input closed (%v), exiting\n", err)
-			break
-		}
+	// === Step 7: Send regular message every second ===
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
 
-		msgData := []byte("$7052000000000000000001111")
-		msgFrame := encodeFrame(addrDeviceAuth, cmdAuth, msgData)
-		fmt.Printf("[client] sending: %q (frame=%d bytes)\n", string(msgData), len(msgFrame))
-		if _, err := conn.Write(msgFrame); err != nil {
+	// Build frame: preamble + addr + cmd + len(LE) + data; CRC computed below.
+	frameWithoutCRC := []byte{
+		0x24, 0x76, 0x59, 0x2C, 0x00, // $ | addr=0x76 | cmd=0x59 | len=44 (LE)
+		0x46, 0x23, 0x00, 0x00, 0xF0, 0xAA, 0x4A, 0x60, // data[0..7]
+		0x9F, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // data[8..15]
+		0x00, 0x00, 0x00, 0x00, 0x73, 0x6F, 0x63, 0x9A, // data[16..23]
+		0x19, 0xE8, 0xA1, 0x40, 0x0A, 0xDD, 0x6E, 0x28, // data[24..31]
+		0x5D, 0xBA, 0xA5, 0xC0, 0xB9, 0x00, 0x00, 0x00, // data[32..39]
+		0x07, 0x00, 0x00, 0x00, // data[40..43]
+	}
+	// CRC = XOR of entire frame (preamble through end of data)
+	regularMsg := append(frameWithoutCRC, crcCalc(frameWithoutCRC))
+
+	var counter byte
+	for range ticker.C {
+		counter++
+		fmt.Printf("[client] sending regular msg #%d (%d bytes)\n", counter, len(regularMsg))
+		if _, err := conn.Write(regularMsg); err != nil {
 			fmt.Fprintf(os.Stderr, "send message: %v\n", err)
 			break
 		}
@@ -280,11 +290,11 @@ func encodeFrame(addr, cmd byte, data []byte) []byte {
 	buf[0] = framePreamble
 	buf[1] = addr
 	buf[2] = cmd
-	binary.BigEndian.PutUint16(buf[3:5], uint16(dataLen))
+	binary.LittleEndian.PutUint16(buf[3:5], uint16(dataLen))
 	if dataLen > 0 {
 		copy(buf[5:5+dataLen], data)
 	}
-	crc := crcCalc(buf[1 : total-1])
+	crc := crcCalc(buf[:total-1])
 	buf[total-1] = crc
 	return buf
 }
@@ -307,7 +317,7 @@ func readFrame(rd *bufio.Reader) (rawFrame, error) {
 
 	addr := header[0]
 	cmd := header[1]
-	dataLen := binary.BigEndian.Uint16(header[2:4])
+	dataLen := binary.LittleEndian.Uint16(header[2:4])
 
 	if dataLen > frameMaxDataLen {
 		return rawFrame{}, fmt.Errorf("data length too large: %d", dataLen)
@@ -323,11 +333,11 @@ func readFrame(rd *bufio.Reader) (rawFrame, error) {
 	full[0] = framePreamble
 	full[1] = addr
 	full[2] = cmd
-	binary.BigEndian.PutUint16(full[3:5], dataLen)
+	binary.LittleEndian.PutUint16(full[3:5], dataLen)
 	copy(full[5:5+dataLen], rest[:dataLen])
 	full[total-1] = rest[dataLen]
 
-	expectedCRC := crcCalc(full[1 : total-1])
+	expectedCRC := crcCalc(full[:total-1])
 	actualCRC := full[total-1]
 	if expectedCRC != actualCRC {
 		return rawFrame{}, fmt.Errorf("CRC mismatch: calc 0x%02x, got 0x%02x", expectedCRC, actualCRC)

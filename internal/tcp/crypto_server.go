@@ -247,11 +247,22 @@ func (s *CryptoServer) handleConnection(conn net.Conn) {
 	go func() {
 		defer close(writerDone)
 		for data := range sub.C {
-			// Wrap broadcast data in a frame and send to device
+			// Broadcast data format: [Addr(1), Cmd(1), Payload(N)]
+			var bcAddr, bcCmd byte
+			var bcData []byte
+			if len(data) >= 2 {
+				bcAddr = data[0]
+				bcCmd = data[1]
+				bcData = data[2:]
+			} else {
+				bcAddr = AddrServerResult
+				bcCmd = CmdAuth
+				bcData = data
+			}
 			bcFrame := Frame{
-				Addr: AddrServerResult,
-				Cmd:  CmdAuth,
-				Data: data,
+				Addr: bcAddr,
+				Cmd:  bcCmd,
+				Data: bcData,
 			}
 			if _, err := conn.Write(EncodeFrame(bcFrame)); err != nil {
 				return
@@ -262,7 +273,7 @@ func (s *CryptoServer) handleConnection(conn net.Conn) {
 	// === Post-handshake: read loop with broadcast ===
 	for {
 		conn.SetReadDeadline(time.Now().Add(5 * time.Minute))
-		fr, _, err := frameReader.ReadFrame()
+		fr, raw, err := frameReader.ReadFrame()
 		if err != nil {
 			if errNet, ok := err.(net.Error); ok && errNet.Timeout() {
 				log.Printf("crypto-tcp: [%s] idle timeout for %q", remote, deviceID)
@@ -273,9 +284,10 @@ func (s *CryptoServer) handleConnection(conn net.Conn) {
 			}
 			return
 		}
-		log.Printf("crypto-tcp: [%s] message from %q: Addr=0x%02x Cmd=0x%02x data=%x",
-			remote, deviceID, fr.Addr, fr.Cmd, fr.Data)
-		s.logEvent("message", deviceID, fmt.Sprintf("Addr=0x%02x Cmd=0x%02x data=%x", fr.Addr, fr.Cmd, fr.Data))
+		log.Printf("crypto-tcp: [%s] message from %q: Addr=0x%02x Cmd=0x%02x data=%x crc=0x%02x",
+			remote, deviceID, fr.Addr, fr.Cmd, fr.Data, raw[len(raw)-1])
+		s.logEvent("message", deviceID, fmt.Sprintf("Addr=0x%02x Cmd=0x%02x data=%x crc=0x%02x",
+			fr.Addr, fr.Cmd, fr.Data, raw[len(raw)-1]))
 
 		if err := s.devices.UpdateLastSeen(context.Background(), deviceID); err != nil {
 			log.Printf("crypto-tcp: [%s] update last seen for %q: %v", remote, deviceID, err)
@@ -284,7 +296,13 @@ func (s *CryptoServer) handleConnection(conn net.Conn) {
 		// Process command and broadcast to other subscribers
 		broadcastData := s.processCommand(fr, deviceID)
 		if broadcastData != nil {
-			s.logEvent("broadcast", deviceID, hex.EncodeToString(broadcastData))
+			// Build full frame for logging (hub carries inner payload)
+			bcFrame := Frame{
+				Addr: broadcastData[0],
+				Cmd:  broadcastData[1],
+				Data: broadcastData[2:],
+			}
+			s.logEvent("broadcast", deviceID, hex.EncodeToString(EncodeFrame(bcFrame)))
 			s.hub.Broadcast(broadcastData, sub.ID())
 		}
 	}
@@ -297,9 +315,13 @@ func (s *CryptoServer) processCommand(fr Frame, deviceID string) []byte {
 	// Default: broadcast the raw frame data to other subscribers.
 	// Different commands can be handled with different preprocessing.
 	switch fr.Addr {
-	// Future: add command-specific cases here, e.g.:
-	// case 0x70:
-	//     return preprocessTelemetry(fr.Data, deviceID)
+	case AddrDeviceRegular:
+		// Regular data message: change Addr to 0x70 and broadcast raw frame
+		out := make([]byte, 1+1+len(fr.Data))
+		out[0] = AddrBroadcast
+		out[1] = fr.Cmd
+		copy(out[2:], fr.Data)
+		return out
 	default:
 		// Broadcast the full frame (Addr + Cmd + Data) to others
 		out := make([]byte, 1+1+len(fr.Data))
@@ -374,7 +396,7 @@ func (fr *FrameReader) ReadFrame() (Frame, []byte, error) {
 
 	addr := header[0]
 	cmd := header[1]
-	dataLen := binary.BigEndian.Uint16(header[2:4])
+	dataLen := binary.LittleEndian.Uint16(header[2:4])
 
 	if dataLen > FrameMaxDataLen {
 		return Frame{}, nil, fmt.Errorf("data length %d exceeds max %d", dataLen, FrameMaxDataLen)
@@ -392,7 +414,7 @@ func (fr *FrameReader) ReadFrame() (Frame, []byte, error) {
 	full[0] = FramePreamble
 	full[1] = addr
 	full[2] = cmd
-	binary.BigEndian.PutUint16(full[3:5], dataLen)
+	binary.LittleEndian.PutUint16(full[3:5], dataLen)
 	copy(full[5:5+dataLen], rest[:dataLen])
 	full[total-1] = rest[dataLen]
 
