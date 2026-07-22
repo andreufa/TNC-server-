@@ -140,7 +140,7 @@ func main() {
 	}
 
 	challenge := challengeFrame.data
-	fmt.Printf("[client] received challenge: %d bytes (time=%x key=%x)\n",
+	fmt.Printf("[client] received challenge: %d bytes (time=%x nonce=%x)\n",
 		len(challenge), challenge[:8], challenge[8:])
 
 	// === Step 3: Sign challenge ===

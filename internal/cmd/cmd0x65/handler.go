@@ -97,7 +97,7 @@ func (h *Handler) handleParamRequest(fr tcp.Frame, conn net.Conn, ctx *tcp.CmdCo
 		return nil, err
 	}
 	log.Printf("cmd0x65: sent challenge to %q", h.deviceID)
-	logEvent(ctx, "message", "→ "+fmt.Sprintf("challenge sent (time=%x key=%x)", challenge[:8], challenge[8:]))
+	logEvent(ctx, "message", "→ "+fmt.Sprintf("challenge sent (time=%x nonce=%x)", challenge[:tcp.TimestampSize], challenge[tcp.TimestampSize:]))
 
 	h.step = stepWaitAuth
 	return nil, nil
