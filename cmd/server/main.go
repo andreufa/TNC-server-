@@ -12,6 +12,8 @@ import (
 
 	"tnc-server/internal/config"
 	"tnc-server/internal/db"
+	"tnc-server/internal/cmd/cmd0x59"
+	"tnc-server/internal/cmd/cmd0x65"
 	"tnc-server/internal/hub"
 	"tnc-server/internal/store"
 	"tnc-server/internal/tcp"
@@ -74,7 +76,11 @@ func run() error {
 	defer h.Stop()
 
 	// --- Crypto TCP server ---
-	cryptoSrv := tcp.NewCryptoServer(cfg.CryptoTCPAddr, devices, h, logChan)
+	handlers := map[byte]tcp.HandlerFactory{
+		tcp.CmdAuth:    func() tcp.CmdHandler { return &cmd0x65.Handler{} },
+		tcp.CmdRegular: func() tcp.CmdHandler { return &cmd0x59.Handler{} },
+	}
+	cryptoSrv := tcp.NewCryptoServer(cfg.CryptoTCPAddr, devices, h, logChan, handlers)
 	cryptoErr := make(chan error, 1)
 	go func() { cryptoErr <- cryptoSrv.ListenAndServe() }()
 

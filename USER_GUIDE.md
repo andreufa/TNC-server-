@@ -2,39 +2,137 @@
 
 ## Overview
 
-TNC-server is a TCP server for device authentication via RSA challenge-response.
-It also includes a web UI for managing devices and users, and a real-time log viewer.
 
-## Quick start
+New file structure
 
-```sh
-# 1. Start Postgres
-docker compose up -d
+internal/tcp/
+  frame.go          — frame encode/decode, constants for all addresses & status codes
+  handler.go         — CmdHandler interface + CmdContext struct
+  crypto_server.go   — CryptoServer: accept connections, dispatch frames by cmd to handlers
+  crypto.go          — RSA crypto helpers (unchanged)
 
-# 2. Start the server
-go run ./cmd/server
+internal/cmd/
+  doc.go             — package doc
+  cmd0x65/
+    handler.go       — AT Authorization state machine (command 0x65)
+  cmd0x59/
+    handler.go       — Regular data message broadcast (command 0x59)
 
-# 3. Open web UI
-# http://localhost:8080
-# Default login: admin / admin
-```
+Protocol changes
 
-## Architecture
+Command 0x65 (AT Authorization):
+┌────────────────────────────┬────────────────────────────┬────────────────────────────┬────────────────────────────┐
+Step                       │ Direction                  │ Addr                       │ Data                       │
+├────────────────────────────┼────────────────────────────┼────────────────────────────┼────────────────────────────┤
+1                          │ Device → Server            │ 0x61                       │ 10B DID                    │
+├────────────────────────────┼────────────────────────────┼────────────────────────────┼────────────────────────────┤
+2                          │ Server → Device            │ 0x64                       │ 8B timestamp + 8B nonce    │
+├────────────────────────────┼────────────────────────────┼────────────────────────────┼────────────────────────────┤
+3                          │ Device → Server            │ 0x60                       │ 10B DID + 256B RSA         │
+                           │                            │                            │ signature                  │
+├────────────────────────────┼────────────────────────────┼────────────────────────────┼────────────────────────────┤
+4a                         │ Server → Device            │ 0x63                       │ 0x00 (processed)           │
+├────────────────────────────┼────────────────────────────┼────────────────────────────┼────────────────────────────┤
+4b                         │ Server → Device            │ 0x63                       │ 0x01 (authorized) or 0x06  │
+                           │                            │                            │ (failed)                   │
+└────────────────────────────┴────────────────────────────┴────────────────────────────┴────────────────────────────┘
 
-| Port  | Protocol  | Purpose                          |
-|-------|-----------|----------------------------------|
-| 8080  | HTTP      | Web UI + API                     |
-| 9001  | TCP       | Binary RSA challenge-response    |
+Status codes:
+0x00 OK · 0x01 Authorized · 0x02 Addr error · 0x03 Spec error · 0x05 Data len error · 0x06 Data value error · 0x08 Timeout · 0x0A Exec error
 
-## Web UI
+Dispatch model
 
-### Adding a device
-1. Log in at `/login`
-2. On the Devices page, enter:
-   - **Device ID** — unique identifier (e.g. `37777`)
-   - **Public Key (PEM)** — the device's RSA public key
-   - Check **В эксплуатацию** to activate
-3. Click **Добавить**
+crypto_server.go now runs a generic read loop per connection. Before auth, only Cmd=0x65 frames are accepted. After the cmd0x65.Handler sets ctx.DeviceID, all registered commands are dispatched via the handlers map. The server creates handlers once:
+
+handlers := map[byte]tcp.CmdHandler{
+    tcp.CmdAuth:    &cmd0x65.Handler{},  // per-connection state machine
+    tcp.CmdRegular: &cmd0x59.Handler{},  // stateless broadcast
+}
+
+To add a new command handler, create a package under internal/cmd/cmd0xNN/, implement tcp.CmdHandler, and register it in main.go.
+
+Explain to me which files and functions a command goes through after it arrives at the server and before it is        
+processed.                                                                                                            
+
+Here's the full chain, file by file and function by function:
+
+────────────────────────────────────────────────────────────
+
+1. `cmd/server/main.go` — Server startup (one-time)
+
+`run()` creates the handler map and passes it to NewCryptoServer:
+handlers := map[byte]tcp.CmdHandler{
+    tcp.CmdAuth:    &cmd0x65.Handler{},
+    tcp.CmdRegular: &cmd0x59.Handler{},
+}
+cryptoSrv := tcp.NewCryptoServer(addr, devices, h, logChan, handlers)
+cryptoSrv.ListenAndServe()   // blocks, runs in a goroutine
+
+────────────────────────────────────────────────────────────
+
+2. `internal/tcp/crypto_server.go` — Connection acceptance
+
+`ListenAndServe()` — accepts TCP connections in a loop:
+net.Listen → ln.Accept() → go s.handleConnection(conn)
+
+────────────────────────────────────────────────────────────
+
+3. `internal/tcp/crypto_server.go` — Per-connection read loop
+
+`handleConnection(conn)` creates a per-connection CmdContext and enters a read loop:
+
+bufio.NewReader(conn)
+NewFrameReader(reader)           → FrameReader wraps the buffered reader
+CmdContext{Devices, Hub, LogChan} → shared context for all handlers on this conn
+
+Then the main read loop (one iteration per incoming frame):
+
+conn.SetReadDeadline(...)
+frameReader.ReadFrame()          → raw bytes → Frame{Addr, Cmd, Data}
+
+────────────────────────────────────────────────────────────
+
+4. `internal/tcp/crypto_server.go` — `FrameReader.ReadFrame()`
+
+Reads from the bufio.Reader byte by byte:
+
+1. Scan for preamble — skip bytes until $ (0x24) found
+2. Read header — 4 bytes: [Addr, Cmd, LenLo, LenHi]
+3. Parse length — binary.LittleEndian.Uint16 → dataLen
+4. Read data + CRC — dataLen bytes of payload + 1 byte CRC
+5. Reconstruct full frame — rebuild the complete byte slice: [$, Addr, Cmd, Len, Data..., CRC]
+6. Call `DecodeFrame(full)` — verifies CRC, returns Frame{Addr, Cmd, Data}
+
+Returns: (Frame, rawBytes, error)
+
+────────────────────────────────────────────────────────────
+
+5. `internal/tcp/frame.go` — `DecodeFrame(raw)`
+
+1. Validates minimum length (≥ 6)
+2. Validates preamble byte is $
+3. Parses dataLen via binary.LittleEndian.Uint16
+4. Validates frame length matches 6 + dataLen
+5. CRC check: crcCalc(raw[:len-1]) — XOR of preamble through last data byte — must match last byte
+
+Returns: Frame{Addr, Cmd, Data} (Data is the payload without CRC)
+
+────────────────────────────────────────────────────────────
+
+6. Back in `handleConnection()` — Dispatch
+
+After ReadFrame returns successfully:
+
+// Before auth, only command 0x65 is allowed
+if ctx.DeviceID == "" && fr.Cmd != CmdAuth { continue }
+
+// Look up handler by command number
+handler := s.handlers[fr.Cmd]    // map lookup: 0x65 → cmd0x65.Handler, 0x59 → cmd0x59.Handler
+
+// Dispatch
+broadcastData, err := handler.Handle(fr, conn, ctx)
+
+────────────────────────────────────────────────────────────
 
 ### Generating keys for a device
 

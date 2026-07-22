@@ -19,24 +19,32 @@ const (
 	FrameMaxDataLen = 1024
 	FrameMaxLen     = FrameMinLen + FrameMaxDataLen
 
-	// Address + Specifier constants as per the ROS–APCS protocol.
-	AddrDeviceHello    = 0x60 // Device → Server: request challenge (hello)
-	AddrServerChallenge = 0x61 // Server → Device: challenge response
-	AddrDeviceAuth     = 0x62 // Device → Server: authorization request (signature)
-	AddrServerResult   = 0x63 // Server → Device: authorization result
+	// Address + Specifier constants for command 0x65 (AT Authorization).
+	AddrAuthCommand       = 0x60 // Device → Server: authorization (DID + signature)
+	AddrParamRequest      = 0x61 // Device → Server: parameter request (DID)
+	AddrServerStatus      = 0x63 // Server → Device: status response
+	AddrChallengeResponse = 0x64 // Server → Device: challenge (timestamp + nonce)
+
+	// Address + Specifier constants for command 0x59 (regular messages).
 	AddrDeviceRegular  = 0x76 // Device → Server: regular data message
 	AddrBroadcast      = 0x70 // Server → Device: broadcast (modified addr)
 
-	// CmdAuth is the command number for all handshake messages.
+	// Command numbers.
 	CmdAuth    byte = 0x65
 	CmdRegular byte = 0x59 // Regular data message command number
 
-	// Result codes (server → device authorization result).
-	ResultAuthorized       byte = 0x01
-	ResultDecodeError      byte = 0x02
-	ResultSpecError        byte = 0x03
-	ResultIntegrityError   byte = 0x07
-	ResultAuthError        byte = 0x0A
+	// Status codes from the status table (server → device).
+	StatusOK             byte = 0x00 // Input message processed successfully
+	StatusAuthorized     byte = 0x01 // Input message instruction executed (auth OK)
+	StatusAddrError      byte = 0x02 // Address error
+	StatusSpecError      byte = 0x03 // Specifier error
+	StatusNumberError    byte = 0x04 // Number error
+	StatusDataLenError   byte = 0x05 // Data field length error
+	StatusDataValueError byte = 0x06 // Data field value error
+	StatusIntegrityError byte = 0x07 // Integrity error (CRC field)
+	StatusTimeoutError   byte = 0x08 // Processing timeout error
+	StatusSeqError       byte = 0x09 // Command sequence error
+	StatusCmdExecError   byte = 0x0A // Command execution error
 
 	// Fixed field sizes.
 	DeviceIDSize = 10 // Device ID is exactly 10 bytes

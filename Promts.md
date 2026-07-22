@@ -1,66 +1,58 @@
-Команда номер 0x65 - Авторизация устройства на сервере 
-Алгоритм авторизации на сервере следующий:
-1. АТ отправляет на сервер Запрос параметров (адрес/спецификатор 0x61) с
-указанием собственного ID устройства (DID);
+Command number 0x65 - Device Authorization (hereinafter referred to as AT) on the server
+The server authorization algorithm is as follows:
+1. The AT sends a Parameter Request (address/specifier 0x61) to the server, specifying
+its own Device ID (DID);
 
-Преамбула Адрес | Спецификатор Номер Длина Данные   CRC
-0х24            0x61            0x65 0х000А 10 байт 1 байт
+Preamble Address | Specifier Number Length Data CRC
+0x24 0x61 0x65 0x000A 10 bytes 1 byte
 
-Тип данных:
-ID устройства (DID) 10 байт char
+Data Type:
+Device ID (DID) 10 bytes char
 
+2. The server responds to the Parameter Request (address/specifier 0x64) specifying
+the current server Timestamp and nonce (challenge);
 
-2. Сервер отвечает на запрос параметров (адрес/спецификатор 0x64) с указанием
-текущего Timestamp сервера и nonce (challenge);
+Preamble Address | Specifier Number Length Status CRC
+0x24 0x63 0x65 0x0001 See status table 1 byte
 
-Преамбула	Адрес | Спецификатор	Номер	Длина	Статус 	                     CRC
-0х24	        0x63	            0x65	0х0001	смотри таблица статусов 	1 байт
+Status table
+0x00 - Input message processed successfully;
+0x01 - Input message instruction executed;
+0x02 - Address error;
+0x03 - Specifier error;
+0x04 - Number error;
+0x05 - Data field length error;
+0x06 - Data field value error;
+0x07 - Integrity error (CRC field);
+0x08 - Processing timeout error;
+0x09 - Command sequence error;
+0x0A - command execution error
 
-таблица статусов
-0х00 - входное сообщение успешно обработано;
-0x01 - инструкция входного сообщения выполнена;
-0х02 - ошибка адреса;
-0x03 - ошибка спецификатора;
-0x04 - ошибка номера;
-0x05 - ошибка длины поля «Данные»;
-0x06 - ошибка значения поля «Данные»;
-0x07 - ошибка целостности (поля «CRC»);
-0x08 - ошибка времени обработки (timeout);
-0x09 - ошибка последовательности команд;
-0x0A - ошибка выполнения команды
+3. The AT generates an RSA signature based on these values ​​and sends an authorization command (address/specifier 0x60) specifying its own device ID (DID) and the RSA signature;
 
+Preamble Address + Specifier Number Length Data CRC
+0x24 0x60 0x65 0x002C 44 bytes 1 byte
+Data type:
+Data type Size
+Device ID 10 bytes
+RSA signature 256 bytes uint8
 
-3. АТ формирует на основе этих значений RSA подпись и отправляет команду
-авторизации (адрес/спецификатор 0x60) с указанием собственного ID устройства
-(DID) и RSA подписи;
+4. The server sends two standard responses to the command (address/specifier 0x63)
 
-Преамбула	Адрес + Спецификатор	Номер	Длина	Данные	    CRC
-0х24	        0x60	            0x65	0х002C	44 байт	    1 байт
-Тип данных:
-Тип данных	    Размер	      
-ID устройства	10 байт  
-RSA подпись	256 байт uint8
+First response
+Preamble Address | Specifier Number Length Status CRC
+0x24 0x63 0x65 0x0001 0x00 1 byte
 
+Second response
+Preamble Address | Specifier Number Length Status CRC
+0x24 0x63 0x65 0x0001 0x01 if authorization is successful and 0x06 if not 1 byte
 
+This is the processing of command 0x65 and all its messages and requests. There will be many such commands. Therefore, it makes sense to separate the general methods into a file like frame.go and put the specific methods for processing specific commands into packages like
+internal/cmd/cmd0x65 (as an example for command 0x65)
 
+Then we already have commands 0x65 and 0x59 (regular messages).
 
-4. Сервер присылает стандартных два ответа на команду (адрес/спецификатор 0x63)
-
-Первый ответ 
-Преамбула	Адрес | Спецификатор	Номер	Длина	Статус               	    CRC
-    0х24	    0x63	            0x65	0х0001	 0х00	                    1 байт
-
-Второй ответ
-Преамбула	Адрес | Спецификатор	Номер	Длина	        Статус               	                            CRC
-    0х24	    0x63	            0x65	0х0001	 0x01 если авторизация успешна и 0x06 если  нет	            1 байт
-
-
-Это обработка команды 0x65 и всех ее сообщений и запросов. Таких комнеад будет множество. Поэтому целесообразно выделить общие методы в файл типа frame.go а специфичные методы обработки тех или иных команд выносить в пакеты типа 
-internal/cmd/cmd0x65 (как пример для команды 0x65)
-
-Тогда у нас уже есть комнады 0x65 и 0х59 (регулярные сообщения)
-
-Давай приведем сервер к работе с таким протоколом
+Let's configure the server to work with this protocol.
 
 
 

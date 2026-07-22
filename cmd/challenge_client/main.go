@@ -1,21 +1,3 @@
-// challenge_client is a test client for the crypto handshake TCP server.
-//
-// Protocol: ROS MP ↔ APCS Communication Module
-//
-// Usage:
-//
-//	go run ./cmd/challenge_client <device_id> [private_key.pem]
-//
-// If no private key file is provided, the built-in stub key is used (matching
-// public key must be registered on the server for this device).
-//
-// The client:
-//  1. Connects to the crypto TCP server (default :9001)
-//  2. Sends Hello (Addr=0x60, Cmd=0x65, 10-byte device ID)
-//  3. Receives Challenge (Addr=0x61, Cmd=0x65, 8B time + 8B key)
-//  4. Signs the challenge (RSA PKCS#1 v1.5 SHA-256)
-//  5. Sends Auth request (Addr=0x62, Cmd=0x65, 10B ID + 256B signature)
-//  6. Receives Result (Addr=0x63, Cmd=0x65, 10B ID + 1B code)
 package main
 
 import (
@@ -40,17 +22,21 @@ const (
 	frameMinLen     = 6
 	frameMaxDataLen = 1024
 
-	addrDeviceHello  = 0x60
-	addrServerChal   = 0x61
-	addrDeviceAuth   = 0x62
-	addrServerResult = 0x63
-	addrRegular      = 0x76
+	// Addresses for command 0x65 (AT Authorization).
+	addrParamRequest = 0x61 // Device → Server: parameter request (DID)
+	addrAuthCommand  = 0x60 // Device → Server: authorization (DID + signature)
+	addrServerStatus = 0x63 // Server → Device: status response
+	addrChallenge    = 0x64 // Server → Device: challenge response
+
+	// Addresses for command 0x59 (regular messages).
+	addrRegular = 0x76
 
 	cmdAuth     byte = 0x65
 	cmdRegular  byte = 0x59
 	deviceIDLen      = 10
 
-	resultAuthorized byte = 0x01
+	statusOK         byte = 0x00
+	statusAuthorized byte = 0x01
 )
 
 // stubPrivateKey is a pre-generated RSA 2048-bit key used when no key file is
@@ -131,24 +117,24 @@ func main() {
 
 	reader := bufio.NewReader(conn)
 
-	// === Step 1: Send Hello (Addr=0x60, Cmd=0x65, 10B ID) ===
+	// === Step 1: Send Parameter Request (Addr=0x61, Cmd=0x65, 10B ID) ===
 	idPadded := padID(deviceID)
-	fmt.Printf("[client] sending hello: Addr=0x60 Cmd=0x65 ID=%q (padded=%d bytes)\n", deviceID, len(idPadded))
-	helloFrame := encodeFrame(addrDeviceHello, cmdAuth, idPadded)
-	if _, err := conn.Write(helloFrame); err != nil {
-		fmt.Fprintf(os.Stderr, "send hello: %v\n", err)
+	fmt.Printf("[client] sending param request: Addr=0x61 Cmd=0x65 ID=%q\n", deviceID)
+	paramFrame := encodeFrame(addrParamRequest, cmdAuth, idPadded)
+	if _, err := conn.Write(paramFrame); err != nil {
+		fmt.Fprintf(os.Stderr, "send param request: %v\n", err)
 		os.Exit(1)
 	}
 
-	// === Step 2: Receive Challenge (Addr=0x61, Cmd=0x65) ===
+	// === Step 2: Receive Challenge (Addr=0x64, Cmd=0x65) ===
 	conn.SetReadDeadline(time.Now().Add(15 * time.Second))
 	challengeFrame, err := readFrame(reader)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "read challenge: %v\n", err)
 		os.Exit(1)
 	}
-	if challengeFrame.addr != addrServerChal || challengeFrame.cmd != cmdAuth {
-		fmt.Fprintf(os.Stderr, "expected Addr=0x61 Cmd=0x65, got Addr=0x%02x Cmd=0x%02x\n",
+	if challengeFrame.addr != addrChallenge || challengeFrame.cmd != cmdAuth {
+		fmt.Fprintf(os.Stderr, "expected Addr=0x64 Cmd=0x65, got Addr=0x%02x Cmd=0x%02x\n",
 			challengeFrame.addr, challengeFrame.cmd)
 		os.Exit(1)
 	}
@@ -165,45 +151,44 @@ func main() {
 	}
 	fmt.Printf("[client] signed challenge: signature=%d bytes\n", len(signature))
 
-	// === Step 4: Send Auth request (Addr=0x62, Cmd=0x65, 10B ID + 256B sig) ===
+	// === Step 4: Send Auth command (Addr=0x60, Cmd=0x65, 10B ID + 256B sig) ===
 	authData := make([]byte, deviceIDLen+len(signature))
 	copy(authData[:deviceIDLen], idPadded)
 	copy(authData[deviceIDLen:], signature)
 
-	fmt.Printf("[client] sending auth request (data=%d bytes)\n", len(authData))
-	authFrame := encodeFrame(addrDeviceAuth, cmdAuth, authData)
+	fmt.Printf("[client] sending auth command (data=%d bytes)\n", len(authData))
+	authFrame := encodeFrame(addrAuthCommand, cmdAuth, authData)
 	if _, err := conn.Write(authFrame); err != nil {
 		fmt.Fprintf(os.Stderr, "send auth: %v\n", err)
 		os.Exit(1)
 	}
 
-	// === Step 5: Receive Result (Addr=0x63, Cmd=0x65, 10B ID + 1B code) ===
-	conn.SetReadDeadline(time.Now().Add(15 * time.Second))
-	resultFrame, err := readFrame(reader)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "read result: %v\n", err)
-		os.Exit(1)
-	}
-	if resultFrame.addr != addrServerResult || resultFrame.cmd != cmdAuth {
-		fmt.Fprintf(os.Stderr, "expected Addr=0x63 Cmd=0x65, got Addr=0x%02x Cmd=0x%02x\n",
-			resultFrame.addr, resultFrame.cmd)
-		os.Exit(1)
+	// === Step 5: Receive two status responses (Addr=0x63, Cmd=0x65) ===
+	for i := 0; i < 2; i++ {
+		conn.SetReadDeadline(time.Now().Add(15 * time.Second))
+		resultFrame, err := readFrame(reader)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "read status %d: %v\n", i+1, err)
+			os.Exit(1)
+		}
+		if resultFrame.addr != addrServerStatus || resultFrame.cmd != cmdAuth {
+			fmt.Fprintf(os.Stderr, "expected Addr=0x63 Cmd=0x65, got Addr=0x%02x Cmd=0x%02x\n",
+				resultFrame.addr, resultFrame.cmd)
+			os.Exit(1)
+		}
+		if len(resultFrame.data) < 1 {
+			fmt.Fprintf(os.Stderr, "status %d: data too short\n", i+1)
+			os.Exit(1)
+		}
+		code := resultFrame.data[0]
+		fmt.Printf("[client] status #%d: code=0x%02x\n", i+1, code)
+		if i == 1 && code != statusAuthorized {
+			fmt.Fprintf(os.Stderr, "authorization failed: code=0x%02x\n", code)
+			os.Exit(1)
+		}
 	}
 
-	if len(resultFrame.data) < 1 {
-		fmt.Fprintf(os.Stderr, "result too short\n")
-		os.Exit(1)
-	}
-	resultCode := resultFrame.data[len(resultFrame.data)-1]
-	resultID := string(resultFrame.data[:len(resultFrame.data)-1])
-
-	switch resultCode {
-	case resultAuthorized:
-		fmt.Printf("[client] AUTHORIZED (code=0x%02x) device=%q\n", resultCode, resultID)
-	default:
-		fmt.Printf("[client] DENIED (code=0x%02x) device=%q data=%x\n", resultCode, resultID, resultFrame.data)
-		os.Exit(1)
-	}
+	fmt.Println("[client] AUTHORIZED")
 
 	// === Step 6: Background reader — print everything from server ===
 	stopReader := make(chan struct{})
@@ -227,10 +212,7 @@ func main() {
 		}
 	}()
 
-	// === Step 7: Send regular message every second ===
-	ticker := time.NewTicker(1 * time.Second)
-	defer ticker.Stop()
-
+	// === Step 7: Wait for Enter, then send regular message ===
 	// Build frame: preamble + addr + cmd + len(LE) + data; CRC computed below.
 	frameWithoutCRC := []byte{
 		0x24, 0x76, 0x59, 0x2C, 0x00, // $ | addr=0x76 | cmd=0x59 | len=44 (LE)
@@ -244,8 +226,13 @@ func main() {
 	// CRC = XOR of entire frame (preamble through end of data)
 	regularMsg := append(frameWithoutCRC, crcCalc(frameWithoutCRC))
 
+	stdin := bufio.NewReader(os.Stdin)
 	var counter byte
-	for range ticker.C {
+	for {
+		fmt.Print("[client] Press Enter to send regular message (Ctrl+C to exit)...")
+		if _, err := stdin.ReadString('\n'); err != nil {
+			break
+		}
 		counter++
 		fmt.Printf("[client] sending regular msg #%d (%d bytes)\n", counter, len(regularMsg))
 		if _, err := conn.Write(regularMsg); err != nil {

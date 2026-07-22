@@ -17,26 +17,28 @@ import (
 	"tnc-server/internal/store"
 )
 
-// CryptoServer handles the RSA challenge-response handshake over TCP.
+// CryptoServer accepts TCP connections and dispatches frames to command handlers.
 type CryptoServer struct {
-	addr    string
-	devices *store.DeviceStore
-	hub     *hub.Hub
-	logChan chan<- string
+	addr     string
+	devices  *store.DeviceStore
+	hub      *hub.Hub
+	logChan  chan<- string
+	handlers map[byte]HandlerFactory // cmd → factory (creates per-connection handler)
 
 	ln   net.Listener
 	wg   sync.WaitGroup
 	quit chan struct{}
 }
 
-// NewCryptoServer creates a new crypto handshake server.
-func NewCryptoServer(addr string, devices *store.DeviceStore, h *hub.Hub, logChan chan<- string) *CryptoServer {
+// NewCryptoServer creates a new crypto TCP server with the given command handler factories.
+func NewCryptoServer(addr string, devices *store.DeviceStore, h *hub.Hub, logChan chan<- string, handlers map[byte]HandlerFactory) *CryptoServer {
 	return &CryptoServer{
-		addr:    addr,
-		devices: devices,
-		hub:     h,
-		logChan: logChan,
-		quit:    make(chan struct{}),
+		addr:     addr,
+		devices:  devices,
+		hub:      h,
+		logChan:  logChan,
+		handlers: handlers,
+		quit:     make(chan struct{}),
 	}
 }
 
@@ -79,7 +81,8 @@ func padDeviceID(id string) []byte {
 	return buf
 }
 
-func trimDeviceID(b []byte) string {
+// TrimDeviceID strips trailing null bytes and spaces from a device ID buffer.
+func TrimDeviceID(b []byte) string {
 	for i := len(b) - 1; i >= 0; i-- {
 		if b[i] != 0 && b[i] != ' ' {
 			return string(b[:i+1])
@@ -99,248 +102,130 @@ func (s *CryptoServer) handleConnection(conn net.Conn) {
 	reader := bufio.NewReader(conn)
 	frameReader := NewFrameReader(reader)
 
-	// === Step 1: Read Hello (Addr=0x60, Cmd=0x65) ===
-	conn.SetReadDeadline(time.Now().Add(30 * time.Second))
-	fr, raw, err := frameReader.ReadFrame()
-	if err != nil {
-		log.Printf("crypto-tcp: [%s] read hello: %v", remote, err)
-		return
-	}
-	s.logRawFrame("", raw)
-	if fr.Addr != AddrDeviceHello || fr.Cmd != CmdAuth {
-		s.sendResult(conn, ResultSpecError, fr.Addr, fr.Cmd, "expected Addr=0x60 Cmd=0x65")
-		return
-	}
-	deviceID := trimDeviceID(fr.Data)
-	log.Printf("crypto-tcp: [%s] hello from device %q", remote, deviceID)
-	s.logEvent("auth", deviceID, fmt.Sprintf("hello (Addr=0x%02x Cmd=0x%02x)", fr.Addr, fr.Cmd))
-
-	// === Step 2: Look up device in DB ===
-	pubKeyPEM, err := s.devices.GetPublicKey(context.Background(), deviceID)
-	if err != nil {
-		log.Printf("crypto-tcp: [%s] device %q not found: %v", remote, deviceID, err)
-		s.sendResult(conn, ResultAuthError, 0, 0, "device not found")
-		s.logEvent("auth", deviceID, "denied: device not found")
-		return
+	// Per-connection context shared across command handlers.
+	ctx := &CmdContext{
+		Devices: s.devices,
+		Hub:     s.hub,
+		LogChan: s.logChan,
 	}
 
-	inService, err := s.devices.IsInService(context.Background(), deviceID)
-	if err != nil || !inService {
-		log.Printf("crypto-tcp: [%s] device %q not in service", remote, deviceID)
-		s.sendResult(conn, ResultAuthError, 0, 0, "device not in service")
-		s.logEvent("auth", deviceID, "denied: not in service")
-		return
-	}
+	var (
+		subscribed bool
+		sub        *hub.Subscriber
+		writerDone chan struct{}
+	)
 
-	// === Step 3: Generate and send challenge (Addr=0x61, Cmd=0x65) ===
-	challenge, err := GenerateChallenge()
-	if err != nil {
-		log.Printf("crypto-tcp: [%s] generate challenge: %v", remote, err)
-		s.sendResult(conn, ResultDecodeError, 0, 0, "internal error")
-		return
-	}
-	log.Printf("crypto-tcp: [%s] sending challenge to %q (len=%d)", remote, deviceID, len(challenge))
-	s.logEvent("message", deviceID, fmt.Sprintf("challenge sent (time=%x key=%x)", challenge[:8], challenge[8:]))
+	// Per-connection handler instances created from factories on first use.
+	perConnHandlers := make(map[byte]CmdHandler)
 
-	challengeFrame := Frame{
-		Addr: AddrServerChallenge,
-		Cmd:  CmdAuth,
-		Data: challenge,
-	}
-	if _, err := conn.Write(EncodeFrame(challengeFrame)); err != nil {
-		log.Printf("crypto-tcp: [%s] send challenge: %v", remote, err)
-		return
-	}
-
-	// === Step 4: Read authorization request (Addr=0x62, Cmd=0x65) ===
-	conn.SetReadDeadline(time.Now().Add(30 * time.Second))
-	fr, _, err = frameReader.ReadFrame()
-	if err != nil {
-		log.Printf("crypto-tcp: [%s] read auth request: %v", remote, err)
-		return
-	}
-	if fr.Addr != AddrDeviceAuth || fr.Cmd != CmdAuth {
-		s.sendResult(conn, ResultSpecError, fr.Addr, fr.Cmd, "expected Addr=0x62 Cmd=0x65")
-		return
-	}
-
-	// Parse: 10 bytes Device ID + 256 bytes RSA signature = 266 bytes
-	respData := fr.Data
-	if len(respData) < DeviceIDSize {
-		s.sendResult(conn, ResultDecodeError, 0, 0, "response too short")
-		return
-	}
-	respDeviceID := trimDeviceID(respData[:DeviceIDSize])
-	signature := respData[DeviceIDSize:]
-
-	if respDeviceID != deviceID {
-		log.Printf("crypto-tcp: [%s] device ID mismatch: hello=%q, response=%q", remote, deviceID, respDeviceID)
-		s.sendResult(conn, ResultAuthError, 0, 0, "device ID mismatch")
-		return
-	}
-
-	log.Printf("crypto-tcp: [%s] received auth request from %q (sig len=%d)", remote, deviceID, len(signature))
-	s.logEvent("message", deviceID, fmt.Sprintf("auth request (Addr=0x%02x Cmd=0x%02x sig=%d)", fr.Addr, fr.Cmd, len(signature)))
-
-	// === Step 5: Check TTL ===
-	expired, err := IsChallengeExpired(challenge)
-	if err != nil {
-		log.Printf("crypto-tcp: [%s] check TTL: %v", remote, err)
-		s.sendResult(conn, ResultDecodeError, 0, 0, "internal error")
-		return
-	}
-	if expired {
-		log.Printf("crypto-tcp: [%s] challenge expired for %q", remote, deviceID)
-		s.sendResult(conn, ResultAuthError, 0, 0, "challenge expired")
-		s.logEvent("auth", deviceID, "denied: challenge expired")
-		return
-	}
-
-	// === Step 6: Verify signature ===
-	pubKey, err := ParsePublicKey(pubKeyPEM)
-	if err != nil {
-		log.Printf("crypto-tcp: [%s] parse public key for %q: %v", remote, deviceID, err)
-		s.sendResult(conn, ResultDecodeError, 0, 0, "internal error")
-		return
-	}
-
-	if err := VerifyChallengeResponse(pubKey, challenge, signature); err != nil {
-		log.Printf("crypto-tcp: [%s] signature verification failed for %q: %v", remote, deviceID, err)
-		s.sendResult(conn, ResultAuthError, 0, 0, "signature verification failed")
-		s.logEvent("auth", deviceID, "denied: signature verification failed")
-		return
-	}
-
-	// === Step 7: Success — subscribe to hub ===
-	log.Printf("crypto-tcp: [%s] device %q authenticated successfully", remote, deviceID)
-	s.logEvent("auth", deviceID, "authorized")
-
-	if err := s.devices.UpdateLastSeen(context.Background(), deviceID); err != nil {
-		log.Printf("crypto-tcp: [%s] update last seen for %q: %v", remote, deviceID, err)
-	}
-
-	// Subscribe to hub for broadcast
-	sub := s.hub.Subscribe()
-	defer s.hub.Unsubscribe(sub)
-	log.Printf("crypto-tcp: [%s] device %q subscribed (id=%d)", remote, deviceID, sub.ID())
-
-	// Build result: 10 bytes device ID + 1 byte code
-	resultData := make([]byte, DeviceIDSize+1)
-	copy(resultData[:DeviceIDSize], padDeviceID(deviceID))
-	resultData[DeviceIDSize] = ResultAuthorized
-
-	resultFrame := Frame{
-		Addr: AddrServerResult,
-		Cmd:  CmdAuth,
-		Data: resultData,
-	}
-	if _, err := conn.Write(EncodeFrame(resultFrame)); err != nil {
-		log.Printf("crypto-tcp: [%s] send result: %v", remote, err)
-		return
-	}
-
-	log.Printf("crypto-tcp: [%s] handshake complete for %q", remote, deviceID)
-
-	// Start writer goroutine: forward broadcast data to this device.
-	// Stops when sub.C is closed (on unsubscribe) or conn write fails.
-	writerDone := make(chan struct{})
-	go func() {
-		defer close(writerDone)
-		for data := range sub.C {
-			// Broadcast data format: [Addr(1), Cmd(1), Payload(N)]
-			var bcAddr, bcCmd byte
-			var bcData []byte
-			if len(data) >= 2 {
-				bcAddr = data[0]
-				bcCmd = data[1]
-				bcData = data[2:]
-			} else {
-				bcAddr = AddrServerResult
-				bcCmd = CmdAuth
-				bcData = data
-			}
-			bcFrame := Frame{
-				Addr: bcAddr,
-				Cmd:  bcCmd,
-				Data: bcData,
-			}
-			if _, err := conn.Write(EncodeFrame(bcFrame)); err != nil {
-				return
-			}
-		}
-	}()
-
-	// === Post-handshake: read loop with broadcast ===
+	// --- Per-connection read loop ---
+	// Before authentication, only command 0x65 (AT) is allowed.
+	// After authentication, all registered commands are dispatched.
 	for {
 		conn.SetReadDeadline(time.Now().Add(5 * time.Minute))
 		fr, raw, err := frameReader.ReadFrame()
 		if err != nil {
 			if errNet, ok := err.(net.Error); ok && errNet.Timeout() {
-				log.Printf("crypto-tcp: [%s] idle timeout for %q", remote, deviceID)
-				s.logEvent("disconnect", deviceID, "idle timeout")
+				log.Printf("crypto-tcp: [%s] idle timeout for %q", remote, ctx.DeviceID)
+				s.logEvent("disconnect", ctx.DeviceID, "idle timeout")
 			} else {
-				log.Printf("crypto-tcp: [%s] read error for %q: %v", remote, deviceID, err)
-				s.logEvent("disconnect", deviceID, fmt.Sprintf("disconnected: %v", err))
+				log.Printf("crypto-tcp: [%s] read error for %q: %v", remote, ctx.DeviceID, err)
+				s.logEvent("disconnect", ctx.DeviceID, fmt.Sprintf("disconnected: %v", err))
 			}
 			return
 		}
-		log.Printf("crypto-tcp: [%s] message from %q: Addr=0x%02x Cmd=0x%02x data=%x crc=0x%02x",
-			remote, deviceID, fr.Addr, fr.Cmd, fr.Data, raw[len(raw)-1])
-		s.logEvent("message", deviceID, fmt.Sprintf("Addr=0x%02x Cmd=0x%02x data=%x crc=0x%02x",
-			fr.Addr, fr.Cmd, fr.Data, raw[len(raw)-1]))
 
-		if err := s.devices.UpdateLastSeen(context.Background(), deviceID); err != nil {
-			log.Printf("crypto-tcp: [%s] update last seen for %q: %v", remote, deviceID, err)
+		log.Printf("crypto-tcp: [%s] frame from %q: Addr=0x%02x Cmd=0x%02x data=%x crc=0x%02x",
+			remote, ctx.DeviceID, fr.Addr, fr.Cmd, fr.Data, raw[len(raw)-1])
+		s.logRawFrame(ctx.DeviceID, raw)
+
+		// Before authentication is complete, only command 0x65 is allowed.
+		if !ctx.Authenticated && fr.Cmd != CmdAuth {
+			log.Printf("crypto-tcp: [%s] refused Cmd=0x%02x before auth", remote, fr.Cmd)
+			continue
 		}
 
-		// Process command and broadcast to other subscribers
-		broadcastData := s.processCommand(fr, deviceID)
+		handler := perConnHandlers[fr.Cmd]
+		if handler == nil {
+			factory, ok := s.handlers[fr.Cmd]
+			if !ok {
+				log.Printf("crypto-tcp: [%s] no handler for Cmd=0x%02x", remote, fr.Cmd)
+				continue
+			}
+			handler = factory()
+			perConnHandlers[fr.Cmd] = handler
+		}
+
+		broadcastData, err := handler.Handle(fr, conn, ctx)
+		if err != nil {
+			log.Printf("crypto-tcp: [%s] handler error for Cmd=0x%02x: %v", remote, fr.Cmd, err)
+			// If auth failed (cmd 0x65 returned error before auth complete), close connection.
+			// Ensure the error status frame is flushed before closing.
+			if !ctx.Authenticated {
+				if tcpConn, ok := conn.(*net.TCPConn); ok {
+					tcpConn.SetLinger(1) // wait up to 1s for pending writes
+				}
+				return
+			}
+			continue
+		}
+
+		// After authorization is fully complete (two statuses sent), subscribe to hub.
+		if ctx.Authenticated && !subscribed {
+			subscribed = true
+			sub = s.hub.Subscribe()
+			writerDone = make(chan struct{})
+			go func() {
+				defer close(writerDone)
+				defer s.hub.Unsubscribe(sub)
+				for data := range sub.C {
+					// Broadcast data format: [Addr(1), Cmd(1), Payload(N)]
+					var bcAddr, bcCmd byte
+					var bcData []byte
+					if len(data) >= 2 {
+						bcAddr = data[0]
+						bcCmd = data[1]
+						bcData = data[2:]
+					} else {
+						bcAddr = AddrServerStatus
+						bcCmd = CmdAuth
+						bcData = data
+					}
+					bcFrame := Frame{
+						Addr: bcAddr,
+						Cmd:  bcCmd,
+						Data: bcData,
+					}
+					if _, err := conn.Write(EncodeFrame(bcFrame)); err != nil {
+						return
+					}
+				}
+			}()
+			log.Printf("crypto-tcp: [%s] device %q subscribed to hub (id=%d)", remote, ctx.DeviceID, sub.ID())
+		}
+
+		// Broadcast to other subscribers.
 		if broadcastData != nil {
-			// Build full frame for logging (hub carries inner payload)
+			// Build full frame for logging.
 			bcFrame := Frame{
 				Addr: broadcastData[0],
 				Cmd:  broadcastData[1],
 				Data: broadcastData[2:],
 			}
-			s.logEvent("broadcast", deviceID, hex.EncodeToString(EncodeFrame(bcFrame)))
-			s.hub.Broadcast(broadcastData, sub.ID())
+			s.logEvent("broadcast", ctx.DeviceID, "→ "+hex.EncodeToString(EncodeFrame(bcFrame)))
+			senderID := uint64(0)
+			if sub != nil {
+				senderID = sub.ID()
+			}
+			s.hub.Broadcast(broadcastData, senderID)
+		}
+
+		if ctx.DeviceID != "" {
+			if err := s.devices.UpdateLastSeen(context.Background(), ctx.DeviceID); err != nil {
+				log.Printf("crypto-tcp: [%s] update last seen for %q: %v", remote, ctx.DeviceID, err)
+			}
 		}
 	}
-}
-
-// processCommand handles a post-auth command frame from a device.
-// Returns data to broadcast to other subscribers, or nil to skip broadcast.
-// Override this method or extend it for command-specific preprocessing.
-func (s *CryptoServer) processCommand(fr Frame, deviceID string) []byte {
-	// Default: broadcast the raw frame data to other subscribers.
-	// Different commands can be handled with different preprocessing.
-	switch fr.Addr {
-	case AddrDeviceRegular:
-		// Regular data message: change Addr to 0x70 and broadcast raw frame
-		out := make([]byte, 1+1+len(fr.Data))
-		out[0] = AddrBroadcast
-		out[1] = fr.Cmd
-		copy(out[2:], fr.Data)
-		return out
-	default:
-		// Broadcast the full frame (Addr + Cmd + Data) to others
-		out := make([]byte, 1+1+len(fr.Data))
-		out[0] = fr.Addr
-		out[1] = fr.Cmd
-		copy(out[2:], fr.Data)
-		return out
-	}
-}
-
-func (s *CryptoServer) sendResult(conn net.Conn, code byte, gotAddr, gotCmd byte, reason string) {
-	resultData := []byte(fmt.Sprintf("err:%s", reason))
-	frame := Frame{
-		Addr: AddrServerResult,
-		Cmd:  CmdAuth,
-		Data: resultData,
-	}
-	conn.Write(EncodeFrame(frame))
-	log.Printf("crypto-tcp: sendResult code=0x%02x reason=%s", code, reason)
 }
 
 func (s *CryptoServer) logRawFrame(deviceID string, raw []byte) {
@@ -348,7 +233,7 @@ func (s *CryptoServer) logRawFrame(deviceID string, raw []byte) {
 		return
 	}
 	select {
-	case s.logChan <- formatLog("message", deviceID, "RAW "+hex.EncodeToString(raw)):
+	case s.logChan <- FormatLog("message", deviceID, "← RAW "+hex.EncodeToString(raw)):
 	default:
 	}
 }
@@ -358,7 +243,7 @@ func (s *CryptoServer) logEvent(eventType, deviceID, message string) {
 		return
 	}
 	select {
-	case s.logChan <- formatLog(eventType, deviceID, message):
+	case s.logChan <- FormatLog(eventType, deviceID, message):
 	default:
 	}
 }
@@ -422,8 +307,8 @@ func (fr *FrameReader) ReadFrame() (Frame, []byte, error) {
 	return f, full, err
 }
 
-// formatLog creates a JSON log entry string for the web log viewer.
-func formatLog(eventType, deviceID, message string) string {
+// FormatLog creates a JSON log entry string for the web log viewer.
+func FormatLog(eventType, deviceID, message string) string {
 	logEntry := struct {
 		Timestamp string `json:"timestamp"`
 		Type      string `json:"type"`
