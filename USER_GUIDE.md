@@ -1,250 +1,267 @@
-# TNC-server — User Guide
+# TNC-server — руководство пользователя
 
-## Overview
+## Назначение
 
+TNC-server — сервер управления устройствами по протоколу ROS MP ↔ APCS.
+Принимает TCP-соединения от устройств, выполняет аутентификацию по
+RSA-подписи (команда `0x65`) и ретранслирует регулярные сообщения
+(команда `0x59`) между подключёнными устройствами через pub/sub-хаб.
 
-New file structure
+Веб-интерфейс (HTTP) позволяет управлять устройствами, пользователями
+и просматривать логи в реальном времени.
 
-internal/tcp/
-  frame.go          — frame encode/decode, constants for all addresses & status codes
-  handler.go         — CmdHandler interface + CmdContext struct
-  crypto_server.go   — CryptoServer: accept connections, dispatch frames by cmd to handlers
-  crypto.go          — RSA crypto helpers (unchanged)
+---
 
-internal/cmd/
-  doc.go             — package doc
-  cmd0x65/
-    handler.go       — AT Authorization state machine (command 0x65)
-  cmd0x59/
-    handler.go       — Regular data message broadcast (command 0x59)
+## Запуск
 
-Protocol changes
+### 1. Переменные окружения
 
-Command 0x65 (AT Authorization):
-┌────────────────────────────┬────────────────────────────┬────────────────────────────┬────────────────────────────┐
-Step                       │ Direction                  │ Addr                       │ Data                       │
-├────────────────────────────┼────────────────────────────┼────────────────────────────┼────────────────────────────┤
-1                          │ Device → Server            │ 0x61                       │ 10B DID                    │
-├────────────────────────────┼────────────────────────────┼────────────────────────────┼────────────────────────────┤
-2                          │ Server → Device            │ 0x64                       │ 8B timestamp + 8B nonce    │
-├────────────────────────────┼────────────────────────────┼────────────────────────────┼────────────────────────────┤
-3                          │ Device → Server            │ 0x60                       │ 10B DID + 256B RSA         │
-                           │                            │                            │ signature                  │
-├────────────────────────────┼────────────────────────────┼────────────────────────────┼────────────────────────────┤
-4a                         │ Server → Device            │ 0x63                       │ 0x00 (processed)           │
-├────────────────────────────┼────────────────────────────┼────────────────────────────┼────────────────────────────┤
-4b                         │ Server → Device            │ 0x63                       │ 0x01 (authorized) or 0x06  │
-                           │                            │                            │ (failed)                   │
-└────────────────────────────┴────────────────────────────┴────────────────────────────┴────────────────────────────┘
+Сервер конфигурируется переменными окружения. Все имеют значения по
+умолчанию, обязательных нет.
 
-Status codes:
-0x00 OK · 0x01 Authorized · 0x02 Addr error · 0x03 Spec error · 0x05 Data len error · 0x06 Data value error · 0x08 Timeout · 0x0A Exec error
+| Переменная | По умолчанию | Назначение |
+|---|---|---|
+| `HTTP_ADDR` | `:8080` | Адрес веб-интерфейса |
+| `TCP_ADDR` | `:9000` | Адрес TCP-сервера (не используется) |
+| `CRYPTO_TCP_ADDR` | `:9001` | Адрес крипто-TCP-сервера (основной) |
+| `DB_HOST` | `localhost` | Хост PostgreSQL |
+| `DB_PORT` | `5432` | Порт PostgreSQL |
+| `DB_USER` | `tnc` | Пользователь БД |
+| `DB_PASSWORD` | `tnc` | Пароль БД |
+| `DB_NAME` | `tnc` | Имя базы данных |
+| `DB_SSL_MODE` | `disable` | Режим SSL для БД |
+| `SESSION_SECRET` | `change-me-in-prod` | Секрет для сессионных токенов |
+| `BOOTSTRAP_ADMIN_USER` | `admin` | Логин администратора при первом запуске |
+| `BOOTSTRAP_ADMIN_PASSWORD` | `admin` | Пароль администратора при первом запуске |
 
-Dispatch model
+### 2. Docker Compose (рекомендуемый способ)
 
-crypto_server.go now runs a generic read loop per connection. Before auth, only Cmd=0x65 frames are accepted. After the cmd0x65.Handler sets ctx.DeviceID, all registered commands are dispatched via the handlers map. The server creates handlers once:
+```bash
+# Создать файл .env с паролями
+cat > .env << 'EOF'
+POSTGRES_USER=tnc
+POSTGRES_PASSWORD=secure-db-password
+POSTGRES_DB=tnc
+DB_PASSWORD=secure-db-password
+SESSION_SECRET=длинная-случайная-строка
+BOOTSTRAP_ADMIN_USER=admin
+BOOTSTRAP_ADMIN_PASSWORD=secure-admin-password
+EOF
 
-handlers := map[byte]tcp.CmdHandler{
-    tcp.CmdAuth:    &cmd0x65.Handler{},  // per-connection state machine
-    tcp.CmdRegular: &cmd0x59.Handler{},  // stateless broadcast
-}
-
-To add a new command handler, create a package under internal/cmd/cmd0xNN/, implement tcp.CmdHandler, and register it in main.go.
-
-Explain to me which files and functions a command goes through after it arrives at the server and before it is        
-processed.                                                                                                            
-
-Here's the full chain, file by file and function by function:
-
-────────────────────────────────────────────────────────────
-
-1. `cmd/server/main.go` — Server startup (one-time)
-
-`run()` creates the handler map and passes it to NewCryptoServer:
-handlers := map[byte]tcp.CmdHandler{
-    tcp.CmdAuth:    &cmd0x65.Handler{},
-    tcp.CmdRegular: &cmd0x59.Handler{},
-}
-cryptoSrv := tcp.NewCryptoServer(addr, devices, h, logChan, handlers)
-cryptoSrv.ListenAndServe()   // blocks, runs in a goroutine
-
-────────────────────────────────────────────────────────────
-
-2. `internal/tcp/crypto_server.go` — Connection acceptance
-
-`ListenAndServe()` — accepts TCP connections in a loop:
-net.Listen → ln.Accept() → go s.handleConnection(conn)
-
-────────────────────────────────────────────────────────────
-
-3. `internal/tcp/crypto_server.go` — Per-connection read loop
-
-`handleConnection(conn)` creates a per-connection CmdContext and enters a read loop:
-
-bufio.NewReader(conn)
-NewFrameReader(reader)           → FrameReader wraps the buffered reader
-CmdContext{Devices, Hub, LogChan} → shared context for all handlers on this conn
-
-Then the main read loop (one iteration per incoming frame):
-
-conn.SetReadDeadline(...)
-frameReader.ReadFrame()          → raw bytes → Frame{Addr, Cmd, Data}
-
-────────────────────────────────────────────────────────────
-
-4. `internal/tcp/crypto_server.go` — `FrameReader.ReadFrame()`
-
-Reads from the bufio.Reader byte by byte:
-
-1. Scan for preamble — skip bytes until $ (0x24) found
-2. Read header — 4 bytes: [Addr, Cmd, LenLo, LenHi]
-3. Parse length — binary.LittleEndian.Uint16 → dataLen
-4. Read data + CRC — dataLen bytes of payload + 1 byte CRC
-5. Reconstruct full frame — rebuild the complete byte slice: [$, Addr, Cmd, Len, Data..., CRC]
-6. Call `DecodeFrame(full)` — verifies CRC, returns Frame{Addr, Cmd, Data}
-
-Returns: (Frame, rawBytes, error)
-
-────────────────────────────────────────────────────────────
-
-5. `internal/tcp/frame.go` — `DecodeFrame(raw)`
-
-1. Validates minimum length (≥ 6)
-2. Validates preamble byte is $
-3. Parses dataLen via binary.LittleEndian.Uint16
-4. Validates frame length matches 6 + dataLen
-5. CRC check: crcCalc(raw[:len-1]) — XOR of preamble through last data byte — must match last byte
-
-Returns: Frame{Addr, Cmd, Data} (Data is the payload without CRC)
-
-────────────────────────────────────────────────────────────
-
-6. Back in `handleConnection()` — Dispatch
-
-After ReadFrame returns successfully:
-
-// Before auth, only command 0x65 is allowed
-if ctx.DeviceID == "" && fr.Cmd != CmdAuth { continue }
-
-// Look up handler by command number
-handler := s.handlers[fr.Cmd]    // map lookup: 0x65 → cmd0x65.Handler, 0x59 → cmd0x59.Handler
-
-// Dispatch
-broadcastData, err := handler.Handle(fr, conn, ctx)
-
-────────────────────────────────────────────────────────────
-
-### Generating keys for a device
-
-```sh
-# Generate private key
-openssl genpkey -algorithm RSA -out device_private.pem -pkeyopt rsa_keygen_bits:2048
-
-# Extract public key
-openssl rsa -pubout -in device_private.pem -out device_public.pem
+# Запустить
+docker compose up -d
 ```
 
-Paste the contents of `device_public.pem` into the web form.
+Сервер будет доступен:
+- Веб-интерфейс: `http://localhost:8080`
+- TCP для устройств: `localhost:9001`
 
-### Logs
-The `/logs` page shows real-time events via WebSocket:
-- Device connections and disconnections
-- Authentication attempts (success/failure)
-- Messages received from devices
+### 3. Локальный запуск (без Docker)
 
-## Testing with the client
+```bash
+# Требуется: Go 1.22+, PostgreSQL 16+
+# Установить переменные окружения
+export DB_HOST=localhost
+export DB_PASSWORD=your-db-password
+export SESSION_SECRET=random-secret-string
 
-```sh
-# Register device 37777 via web UI (paste public key)
-
-# Run client with private key
-go run ./cmd/challenge_client 37777 device_private.pem
-
-# Or use built-in stub key (register _stub_public.pem first)
-go run ./cmd/challenge_client 37777
+# Применить миграции и запустить
+go run ./cmd/server/main.go
 ```
 
-The client performs the handshake, then waits for **Enter** to send test messages. Press **Ctrl+C** to exit.
+---
 
-## Protocol
+## Пользователи и роли
 
-Binary frame format for device↔server communication:
+Система поддерживает три роли:
 
-```
-$ | Addr+Spec(1) | Cmd(1) | DataLen(2, BE) | Data(N) | CRC(1)
-```
+| Роль | Права |
+|---|---|
+| `user` | Только просмотр устройств и логов |
+| `privileged` | Управление устройствами (добавление, удаление, смена ключа, ID, статуса эксплуатации) |
+| `admin` | Всё вышеперечисленное + управление пользователями |
 
-| Field      | Size   | Description                          |
-|------------|--------|--------------------------------------|
-| Preamble   | 1 byte | `$` (0x24)                           |
-| Addr+Spec  | 1 byte | `0x60`=hello `0x61`=challenge `0x62`=auth `0x63`=result |
-| Command    | 1 byte | Always `0x65` for handshake          |
-| DataLen    | 2 bytes| Payload length, big-endian, max 1024 |
-| Data       | N bytes| Payload                              |
-| CRC        | 1 byte | XOR of bytes from Addr through Data  |
+### Bootstrap-администратор
 
-### Handshake flow
+При первом запуске сервер автоматически создаёт (или обновляет пароль)
+администратора, указанного в переменных `BOOTSTRAP_ADMIN_USER` и
+`BOOTSTRAP_ADMIN_PASSWORD`. Если администратор уже существует, пароль
+**не перезаписывается** — используется существующий.
 
-All messages use Cmd=0x65. Addr+Spec distinguishes message purpose.
+### Создание пользователей
 
-```
-Device                              Server
-  │                                   │
-  │── Hello ────────────────────────→│  Addr=0x60 Cmd=0x65
-  │   [10 bytes: Device ID]          │  padded with 0x00
-  │                                   │
-  │←─ Challenge ─────────────────────│  Addr=0x61 Cmd=0x65
-  │   [8B time + 8B random key]      │  16 bytes total
-  │                                   │
-  │── Auth Request ─────────────────→│  Addr=0x62 Cmd=0x65
-  │   [10B ID + 256B RSA signature]  │  266 bytes total
-  │                                   │
-  │←─ Result ────────────────────────│  Addr=0x63 Cmd=0x65
-  │   [10B ID + 1B result code]      │  11 bytes total
-```
+Только администратор может создавать пользователей через веб-интерфейс:
 
-### Result codes
+1. Войдите под учётной записью администратора
+2. Перейдите на вкладку «Пользователи»
+3. Нажмите «Создать пользователя»
+4. Укажите имя, пароль и роль
 
-| Code   | Meaning                             |
-|--------|-------------------------------------|
-| `0x01` | Authorized                          |
-| `0x02` | Error decoding data field           |
-| `0x03` | Error combining specifier + number  |
-| `0x07` | Integrity error (CRC)               |
-| `0x0A` | Authorization error                 |
+Пароли пользователей хешируются bcrypt и хранятся в таблице `users`.
 
-### Challenge
+---
 
-- 8-byte Unix timestamp (uint64, big-endian) + 8 random bytes = 16 bytes total
-- Valid for 5 minutes (TTL checked via embedded timestamp)
-- Signed with RSA-2048 PKCS#1 v1.5 + SHA-256
+## Устройства
 
-## Configuration
+### Регистрация устройства
 
-| Variable              | Default     | Description          |
-|-----------------------|-------------|----------------------|
-| `DB_HOST`             | `localhost` | Postgres host        |
-| `DB_PORT`             | `5432`      | Postgres port        |
-| `DB_USER`             | `tnc`       | Postgres user        |
-| `DB_PASSWORD`         | `tnc`       | Postgres password    |
-| `DB_NAME`             | `tnc`       | Database name        |
-| `HTTP_ADDR`           | `:8080`     | Web UI listen addr   |
-| `CRYPTO_TCP_ADDR`     | `:9001`     | Crypto TCP addr      |
-| `SESSION_SECRET`      | *(required)*| Session encryption   |
-| `BOOTSTRAP_ADMIN_USER`| `admin`     | Initial admin username|
-| `BOOTSTRAP_ADMIN_PASSWORD` | `admin` | Initial admin password|
+Устройство должно быть зарегистрировано в базе данных до подключения.
+Для регистрации используется веб-интерфейс (роль `privileged` или `admin`):
 
-## Database schema
+1. Вкладка «Устройства» → «Добавить устройство»
+2. Укажите **Device ID** (строка до 10 символов)
+3. Вставьте **публичный ключ** в формате PEM (RSA 2048+ бит)
+4. При необходимости включите флажок «В эксплуатацию»
 
-```sql
-devices (id, public_key, password_hash, in_service, last_seen_at, ...)
-users   (id, username, password_hash, role)
-sessions(token, user_id, expires_at)
+Генерация RSA-ключей (OpenSSL):
+```bash
+openssl genpkey -algorithm RSA -out private_key.pem -pkeyopt rsa_keygen_bits:2048
+openssl rsa -pubout -in private_key.pem -out public_key.pem
 ```
 
-## Docker
+### Смена публичного ключа
 
-```sh
-docker compose up -d    # starts Postgres + server
-docker compose down     # stops everything
+Если устройство перегенерировало ключи, администратор или privileged-
+пользователь может обновить публичный ключ через веб-интерфейс:
+
+- В строке устройства нажать «Сменить ключ»
+- Вставить новый публичный ключ (PEM)
+- Нажать кнопку
+
+### Статус эксплуатации
+
+- **В эксплуатации** — устройство может подключаться и аутентифицироваться
+- **Отключено** — устройство не может пройти аутентификацию (сервер отвергнет)
+
+Переключение — кнопки «В эксплуатацию» / «Снять с эксплуатации» в строке
+устройства.
+
+### Статус подключения
+
+- **В сети** — устройство отправляло данные в последние 30 секунд
+- **Не в сети** — устройство неактивно более 30 секунд
+
+### Удаление устройства
+
+Устройство помечается как удалённое (`deleted_at`), но физически остаётся
+в базе. Повторное добавление с тем же ID восстановит его.
+
+---
+
+## Протокол аутентификации (команда 0x65)
+
+1. Устройство отправляет **Parameter Request** (`Addr=0x61`) со своим Device ID
+2. Сервер отвечает **Challenge** (`Addr=0x64`): 8 байт timestamp (Unix-ms) +
+   32 байта случайного nonce = **40 байт**
+3. Устройство подписывает challenge своим приватным RSA-ключом
+   (PKCS#1 v1.5, SHA-256) и отправляет **Authorization** (`Addr=0x60`):
+   10 байт Device ID + 256 байт подписи
+4. Сервер отправляет **два статусных ответа** (`Addr=0x63`):
+   - Первый: `0x00` (команда обработана)
+   - Второй: `0x01` (авторизован) или `0x06` (ошибка подписи)
+
+После успешной аутентификации устройство добавляется в общий хаб и
+начинает получать broadcast-сообщения от других устройств.
+
+### Коды статусов
+
+| Код | Описание |
+|---|---|
+| `0x00` | Входное сообщение обработано успешно |
+| `0x01` | Команда выполнена (авторизация успешна) |
+| `0x02` | Ошибка адреса |
+| `0x03` | Ошибка спецификатора |
+| `0x04` | Ошибка номера команды |
+| `0x05` | Ошибка длины поля данных |
+| `0x06` | Ошибка значения поля данных |
+| `0x07` | Ошибка целостности (CRC) |
+| `0x08` | Ошибка таймаута обработки |
+| `0x09` | Ошибка последовательности команд |
+| `0x0A` | Ошибка выполнения команды |
+
+---
+
+## Регулярные сообщения (команда 0x59)
+
+После аутентификации устройство может отправлять регулярные сообщения:
+
 ```
+$ | 0x76 | 0x59 | 0x002C (LE) | 44 байта данных | CRC
+```
+
+Сервер изменяет адрес на `0x70` и рассылает сообщение всем остальным
+подключённым устройствам через pub/sub-хаб.
+
+---
+
+## Формат кадра (общий)
+
+```
+$ | Addr(1) | Cmd(1) | DataLen(2, little-endian) | Data(N) | CRC(1)
+```
+
+- **Preamble**: `$` = `0x24`
+- **Addr**: адрес + спецификатор
+- **Cmd**: номер команды
+- **DataLen**: длина данных в байтах (little-endian)
+- **Data**: полезная нагрузка
+- **CRC**: XOR всех байтов от preamble до конца данных включительно
+
+Минимальная длина кадра: 6 байт.
+
+---
+
+## Логи
+
+Веб-интерфейс показывает логи в реальном времени через WebSocket.
+Направление сообщений обозначается стрелками:
+
+- `←` — сообщение **от устройства** к серверу
+- `→` — сообщение **от сервера** к устройству
+
+---
+
+## Тестовый клиент
+
+Для отладки используется `cmd/challenge_client`:
+
+```bash
+go run ./cmd/challenge_client <device_id> [путь_к_приватному_ключу.pem]
+```
+
+Клиент:
+1. Подключается к `localhost:9001`
+2. Проходит аутентификацию (команда `0x65`)
+3. Ждёт нажатия Enter
+4. Отправляет тестовое регулярное сообщение (команда `0x59`, 44 байта)
+
+Если приватный ключ не указан, используется встроенный stub-ключ
+(публичная часть должна быть зарегистрирована на сервере для этого
+Device ID).
+
+---
+
+## Расширение — добавление новых команд
+
+Сервер использует архитектуру с диспетчеризацией по номеру команды.
+Чтобы добавить обработчик новой команды:
+
+1. Создать пакет `internal/cmd/cmd0xNN/`
+2. Реализовать интерфейс `tcp.CmdHandler`:
+   ```go
+   type CmdHandler interface {
+       Handle(fr Frame, conn net.Conn, ctx *CmdContext) ([]byte, error)
+   }
+   ```
+3. Зарегистрировать фабрику в `cmd/server/main.go`:
+   ```go
+   handlers := map[byte]tcp.HandlerFactory{
+       tcp.CmdAuth:    func() tcp.CmdHandler { return &cmd0x65.Handler{} },
+       tcp.CmdRegular: func() tcp.CmdHandler { return &cmd0x59.Handler{} },
+       // новая команда:
+       cmdNew:         func() tcp.CmdHandler { return &cmd0xNN.Handler{} },
+   }
+   ```
+
+Фабрика гарантирует, что каждый экземпляр обработчика создаётся заново
+для каждого TCP-соединения (важно для stateful-обработчиков вроде `0x65`).
