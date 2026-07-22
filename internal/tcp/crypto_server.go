@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -397,4 +398,22 @@ func (fr *FrameReader) ReadFrame() (Frame, []byte, error) {
 
 	f, err := DecodeFrame(full)
 	return f, full, err
+}
+
+// formatLog creates a JSON log entry string for the web log viewer.
+func formatLog(eventType, deviceID, message string) string {
+	logEntry := struct {
+		Timestamp string `json:"timestamp"`
+		Type      string `json:"type"`
+		DeviceID  string `json:"deviceId"`
+		Message   string `json:"message"`
+	}{
+		Timestamp: time.Now().Format("2006-01-02 15:04:05"),
+		Type:      eventType,
+		DeviceID:  deviceID,
+		Message:   message,
+	}
+
+	data, _ := json.Marshal(logEntry)
+	return string(data)
 }
