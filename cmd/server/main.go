@@ -14,6 +14,7 @@ import (
 	"tnc-server/internal/db"
 	"tnc-server/internal/cmd/cmd0x59"
 	"tnc-server/internal/cmd/cmd0x65"
+	"tnc-server/internal/health"
 	"tnc-server/internal/hub"
 	"tnc-server/internal/store"
 	"tnc-server/internal/tcp"
@@ -74,6 +75,11 @@ func run() error {
 	h := hub.New()
 	go h.Run()
 	defer h.Stop()
+
+	// --- health monitor ---
+	healthMon := health.New(h)
+	healthMon.Start(time.Minute)
+	defer healthMon.Stop()
 
 	// --- Crypto TCP server ---
 	handlers := map[byte]tcp.HandlerFactory{

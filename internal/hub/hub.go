@@ -22,6 +22,8 @@ type Hub struct {
 	broadcast  chan message
 	quit       chan struct{}
 	nextID     atomic.Uint64
+	msgCount   atomic.Uint64 // total broadcast messages (monotonically increasing)
+	subCount   atomic.Int64  // current number of active subscribers
 }
 
 type message struct {
@@ -48,12 +50,15 @@ func (h *Hub) Run() {
 		select {
 		case s := <-h.register:
 			subscribers[s.id] = s
+			h.subCount.Add(1)
 		case s := <-h.unregister:
 			if _, ok := subscribers[s.id]; ok {
 				delete(subscribers, s.id)
 				close(s.C)
+				h.subCount.Add(-1)
 			}
 		case m := <-h.broadcast:
+			h.msgCount.Add(1)
 			for id, s := range subscribers {
 				if id == m.sender {
 					continue // don't echo back to the sender
@@ -102,6 +107,12 @@ func (h *Hub) Broadcast(data []byte, senderID uint64) {
 
 // ID returns the subscriber's id, for use as senderID in Broadcast.
 func (s *Subscriber) ID() uint64 { return s.id }
+
+// MsgTotal returns the total number of broadcast messages since the hub started.
+func (h *Hub) MsgTotal() uint64 { return h.msgCount.Load() }
+
+// SubCount returns the current number of active subscribers.
+func (h *Hub) SubCount() int64 { return h.subCount.Load() }
 
 // Stop shuts down the hub and closes all subscriber channels.
 func (h *Hub) Stop() { close(h.quit) }
