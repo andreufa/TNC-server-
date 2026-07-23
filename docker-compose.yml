@@ -24,12 +24,12 @@ services:
     # Пробрасываем порты на хост
     ports:
       - "8080:8080"
-      - "9000:9000"
+      - "9001:9001"
     # Явно передаём переменные в контейнер.
     # Если переменной нет в .env или CI, будет использовано значение после :-
     environment:
       HTTP_ADDR: ${HTTP_ADDR:-:8080}
-      TCP_ADDR: ${TCP_ADDR:-:9000}
+      CRYPTO_TCP_ADDR: ${CRYPTO_TCP_ADDR:-:9001}
       DB_HOST: ${DB_HOST:-db}
       DB_PORT: ${DB_PORT:-5432}
       DB_USER: ${DB_USER:-tnc}

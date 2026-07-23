@@ -99,6 +99,9 @@ func (s *CryptoServer) handleConnection(conn net.Conn) {
 	log.Printf("crypto-tcp: [%s] new connection", remote)
 	s.logEvent("connect", remote, "new connection")
 
+	connDone := make(chan struct{})
+	defer close(connDone)
+
 	reader := bufio.NewReader(conn)
 	frameReader := NewFrameReader(reader)
 
@@ -112,7 +115,6 @@ func (s *CryptoServer) handleConnection(conn net.Conn) {
 	var (
 		subscribed bool
 		sub        *hub.Subscriber
-		writerDone chan struct{}
 	)
 
 	// Per-connection handler instances created from factories on first use.
@@ -174,30 +176,36 @@ func (s *CryptoServer) handleConnection(conn net.Conn) {
 		if ctx.Authenticated && !subscribed {
 			subscribed = true
 			sub = s.hub.Subscribe()
-			writerDone = make(chan struct{})
 			go func() {
-				defer close(writerDone)
 				defer s.hub.Unsubscribe(sub)
-				for data := range sub.C {
-					// Broadcast data format: [Addr(1), Cmd(1), Payload(N)]
-					var bcAddr, bcCmd byte
-					var bcData []byte
-					if len(data) >= 2 {
-						bcAddr = data[0]
-						bcCmd = data[1]
-						bcData = data[2:]
-					} else {
-						bcAddr = AddrServerStatus
-						bcCmd = CmdAuth
-						bcData = data
-					}
-					bcFrame := Frame{
-						Addr: bcAddr,
-						Cmd:  bcCmd,
-						Data: bcData,
-					}
-					if _, err := conn.Write(EncodeFrame(bcFrame)); err != nil {
+				for {
+					select {
+					case <-connDone:
 						return
+					case data, ok := <-sub.C:
+						if !ok {
+							return
+						}
+						// Broadcast data format: [Addr(1), Cmd(1), Payload(N)]
+						var bcAddr, bcCmd byte
+						var bcData []byte
+						if len(data) >= 2 {
+							bcAddr = data[0]
+							bcCmd = data[1]
+							bcData = data[2:]
+						} else {
+							bcAddr = AddrServerStatus
+							bcCmd = CmdAuth
+							bcData = data
+						}
+						bcFrame := Frame{
+							Addr: bcAddr,
+							Cmd:  bcCmd,
+							Data: bcData,
+						}
+						if _, err := conn.Write(EncodeFrame(bcFrame)); err != nil {
+							return
+						}
 					}
 				}
 			}()

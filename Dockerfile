@@ -27,6 +27,6 @@ COPY --from=builder /build/tnc-server .
 COPY --from=builder /build/migrations ./migrations
 
 EXPOSE 8080
-EXPOSE 9000
+EXPOSE 9001
 
 CMD ["./tnc-server"]
