@@ -25,14 +25,14 @@ const (
 )
 
 // GenerateChallenge creates a challenge: 32 random bytes (nonce) +
-// 8-byte Unix millisecond timestamp. Returns a 40-byte challenge (nonce first, then time).
+// 8-byte Unix millisecond timestamp (little-endian). Returns a 40-byte challenge (nonce first, then time).
 func GenerateChallenge() ([]byte, error) {
 	nonce := make([]byte, ChallengeSize)
 	if _, err := rand.Read(nonce); err != nil {
 		return nil, fmt.Errorf("generate nonce: %w", err)
 	}
 	ts := make([]byte, TimestampSize)
-	binary.BigEndian.PutUint64(ts, uint64(time.Now().UnixMilli()))
+	binary.LittleEndian.PutUint64(ts, uint64(time.Now().UnixMilli()))
 
 	challenge := make([]byte, ChallengeSize+TimestampSize)
 	copy(challenge[:ChallengeSize], nonce)
@@ -40,13 +40,13 @@ func GenerateChallenge() ([]byte, error) {
 	return challenge, nil
 }
 
-// ExtractTimestamp parses the timestamp from a challenge (last 8 bytes, big-endian,
+// ExtractTimestamp parses the timestamp from a challenge (last 8 bytes, little-endian,
 // after the 32-byte nonce).
 func ExtractTimestamp(challenge []byte) (time.Time, error) {
 	if len(challenge) < ChallengeSize+TimestampSize {
 		return time.Time{}, errors.New("challenge too short")
 	}
-	raw := binary.BigEndian.Uint64(challenge[ChallengeSize:])
+	raw := binary.LittleEndian.Uint64(challenge[ChallengeSize:])
 	return time.UnixMilli(int64(raw)), nil
 }
 

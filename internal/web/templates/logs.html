@@ -63,7 +63,8 @@
     .log-type-auth { background: #2b6cb0; color: #fff; }
     .log-type-message { background: #553c9a; color: #fff; }
     .log-type-handshake { background: #744210; color: #fff; }
-    .log-type-system { background: #4a5568; color: #fff; }
+     .log-type-system { background: #4a5568; color: #fff; }
+     .log-type-debug { background: #6b46c1; color: #e9d8fd; }
 
     /* Вторая строка - само сообщение */
     .log-message-wrapper {
@@ -126,7 +127,8 @@
             'auth': 'log-type-auth',
             'message': 'log-type-message',
             'handshake': 'log-type-handshake',
-            'system': 'log-type-system'
+            'system': 'log-type-system',
+            'debug': 'log-type-debug'
         };
         const typeClass = typeClassMap[type] || 'log-type-system';
 
