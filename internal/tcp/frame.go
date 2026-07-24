@@ -47,7 +47,10 @@ const (
 	StatusCmdExecError   byte = 0x0A // Command execution error
 
 	// Fixed field sizes.
-	DeviceIDSize = 10 // Device ID is exactly 10 bytes
+	DeviceIDSize = 14 // Device ID is exactly 14 bytes
+
+	// Auth protocol version for command 0x65.
+	AuthProtocolVersion byte = 0x01
 )
 
 // Frame represents a parsed binary frame.

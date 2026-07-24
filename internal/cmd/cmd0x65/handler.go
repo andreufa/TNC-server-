@@ -88,16 +88,21 @@ func (h *Handler) handleParamRequest(fr tcp.Frame, conn net.Conn, ctx *tcp.CmdCo
 	}
 	h.challenge = challenge
 
+	// Challenge frame data: Status(1) + nonce(32) + timestamp(8) = 41 bytes
+	challengeData := make([]byte, 1+len(challenge))
+	challengeData[0] = tcp.StatusOK
+	copy(challengeData[1:], challenge)
+
 	challengeFrame := tcp.Frame{
 		Addr: tcp.AddrChallengeResponse,
 		Cmd:  tcp.CmdAuth,
-		Data: challenge,
+		Data: challengeData,
 	}
 	if _, err := conn.Write(tcp.EncodeFrame(challengeFrame)); err != nil {
 		return nil, err
 	}
 	log.Printf("cmd0x65: sent challenge to %q", h.deviceID)
-	logEvent(ctx, "message", "→ "+fmt.Sprintf("challenge sent (time=%x nonce=%x)", challenge[:tcp.TimestampSize], challenge[tcp.TimestampSize:]))
+	logEvent(ctx, "message", "→ "+fmt.Sprintf("challenge sent (nonce=%x time=%x)", challenge[:tcp.ChallengeSize], challenge[tcp.ChallengeSize:]))
 
 	h.step = stepWaitAuth
 	return nil, nil
@@ -109,13 +114,21 @@ func (h *Handler) handleAuth(fr tcp.Frame, conn net.Conn, ctx *tcp.CmdContext) (
 		return nil, fmt.Errorf("expected Addr=0x%02x, got 0x%02x", tcp.AddrAuthCommand, fr.Addr)
 	}
 
-	// Parse: 10 bytes DID + 256 bytes signature
-	if len(fr.Data) < tcp.DeviceIDSize {
+	// Parse: 14 bytes DID + 1 byte protocol version + 256 bytes signature = 271 bytes
+	if len(fr.Data) < tcp.DeviceIDSize+1+256 {
 		h.sendStatus(conn, ctx, tcp.StatusDataLenError)
 		return nil, fmt.Errorf("auth data too short")
 	}
 	respDID := tcp.TrimDeviceID(fr.Data[:tcp.DeviceIDSize])
-	signature := fr.Data[tcp.DeviceIDSize:]
+	version := fr.Data[tcp.DeviceIDSize]
+	signature := fr.Data[tcp.DeviceIDSize+1:]
+
+	if version != tcp.AuthProtocolVersion {
+		log.Printf("cmd0x65: unsupported auth protocol version %d from %q", version, respDID)
+		h.sendTwoStatuses(conn, ctx, tcp.StatusDataValueError)
+		logEvent(ctx, "auth", "denied: unsupported protocol version")
+		return nil, fmt.Errorf("unsupported auth protocol version %d", version)
+	}
 
 	if respDID != h.deviceID {
 		log.Printf("cmd0x65: DID mismatch: expected %q, got %q", h.deviceID, respDID)

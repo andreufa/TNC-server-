@@ -33,7 +33,8 @@ const (
 
 	cmdAuth     byte = 0x65
 	cmdRegular  byte = 0x59
-	deviceIDLen      = 10
+	deviceIDLen      = 14
+	authVersion      = 0x01
 
 	statusOK         byte = 0x00
 	statusAuthorized byte = 0x01
@@ -117,7 +118,7 @@ func main() {
 
 	reader := bufio.NewReader(conn)
 
-	// === Step 1: Send Parameter Request (Addr=0x61, Cmd=0x65, 10B ID) ===
+	// === Step 1: Send Parameter Request (Addr=0x61, Cmd=0x65, 14B ID) ===
 	idPadded := padID(deviceID)
 	fmt.Printf("[client] sending param request: Addr=0x61 Cmd=0x65 ID=%q\n", deviceID)
 	paramFrame := encodeFrame(addrParamRequest, cmdAuth, idPadded)
@@ -139,9 +140,15 @@ func main() {
 		os.Exit(1)
 	}
 
-	challenge := challengeFrame.data
-	fmt.Printf("[client] received challenge: %d bytes (time=%x nonce=%x)\n",
-		len(challenge), challenge[:8], challenge[8:])
+	// Challenge frame data: status(1) + nonce(32) + timestamp(8) = 41 bytes
+	if len(challengeFrame.data) < 41 {
+		fmt.Fprintf(os.Stderr, "challenge data too short: %d bytes\n", len(challengeFrame.data))
+		os.Exit(1)
+	}
+	status := challengeFrame.data[0]
+	challenge := challengeFrame.data[1:]
+	fmt.Printf("[client] received challenge: status=0x%02x, %d bytes (nonce=%x time=%x)\n",
+		status, len(challenge), challenge[:32], challenge[32:])
 
 	// === Step 3: Sign challenge ===
 	signature, err := signChallenge(privKey, challenge)
@@ -151,10 +158,11 @@ func main() {
 	}
 	fmt.Printf("[client] signed challenge: signature=%d bytes\n", len(signature))
 
-	// === Step 4: Send Auth command (Addr=0x60, Cmd=0x65, 10B ID + 256B sig) ===
-	authData := make([]byte, deviceIDLen+len(signature))
+	// === Step 4: Send Auth command (Addr=0x60, Cmd=0x65, 14B ID + 1B version + 256B sig) ===
+	authData := make([]byte, deviceIDLen+1+len(signature))
 	copy(authData[:deviceIDLen], idPadded)
-	copy(authData[deviceIDLen:], signature)
+	authData[deviceIDLen] = authVersion
+	copy(authData[deviceIDLen+1:], signature)
 
 	fmt.Printf("[client] sending auth command (data=%d bytes)\n", len(authData))
 	authFrame := encodeFrame(addrAuthCommand, cmdAuth, authData)

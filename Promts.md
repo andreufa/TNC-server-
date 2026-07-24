@@ -4,37 +4,29 @@ The server authorization algorithm is as follows:
 its own Device ID (DID);
 
 Preamble Address | Specifier Number Length Data CRC
-0x24 0x61 0x65 0x000A 10 bytes 1 byte
+0x24 0x61 0x65 0x000A 14 bytes 1 byte
 
 Data Type:
-Device ID (DID) 10 bytes char
+Device ID (DID) 14 bytes 
 
 2. The server responds to the Parameter Request (address/specifier 0x64) specifying
 the current server Timestamp and nonce (challenge);
 
-Preamble Address | Specifier Number Length Status CRC
-0x24 0x63 0x65 0x0001 See status table 1 byte
+Preamble Address | Specifier Number Length Status Data CRC
+0x24 0x64 0x65 0x0029 1 byte 40 bytes 1 byte
 
-Status table
-0x00 - Input message processed successfully;
-0x01 - Input message instruction executed;
-0x02 - Address error;
-0x03 - Specifier error;
-0x04 - Number error;
-0x05 - Data field length error;
-0x06 - Data field value error;
-0x07 - Integrity error (CRC field);
-0x08 - Processing timeout error;
-0x09 - Command sequence error;
-0x0A - command execution error
+Data                    Type 
+nonce (challenge)       32-byte sequence
+Current server time UTC  8 bytes uint64 milliseconds       Unix-time*1000
 
 3. The AT generates an RSA signature based on these values ​​and sends an authorization command (address/specifier 0x60) specifying its own device ID (DID) and the RSA signature;
 
 Preamble Address + Specifier Number Length Data CRC
-0x24 0x60 0x65 0x002C 44 bytes 1 byte
+0x24 0x60 0x65 0x010F 271 bytes 1 byte
 Data type:
 Data type Size
-Device ID 10 bytes
+Device ID 14 bytes
+Authentication protocol version 1 byte
 RSA signature 256 bytes uint8
 
 4. The server sends two standard responses to the command (address/specifier 0x63)
