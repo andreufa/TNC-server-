@@ -137,12 +137,12 @@ type Message struct {
    - fr.Addr == 0x76 ✓
    - return &Message{Mode:DeliverBroadcast, Addr:0x70, Cmd:0x59, Payload:fr.Data}
 9. Logging: "cmd: Cmd=0x59 → DeliverBroadcast (addr=0x70 payload=44 bytes)"
-10. CryptoServer:
-    - msg.Mode == DeliverBroadcast
-    - wireBytes = msg.WireBytes() → [0x70, 0x59, 44 bytes]
-    - log event "broadcast → ..."
-    - hub.Broadcast(wireBytes, senderID)
-11. Hub: доставляет wireBytes всем подписчикам кроме отправителя
+ 10. CryptoServer:
+     - msg.Mode == DeliverBroadcast
+     - wireBytes = msg.WireBytes() → [0x70, 0x59, 44 bytes]
+     - res = hub.Broadcast(wireBytes, senderID) → {Sent, Delivered}
+     - консоль + web-лог: "sent [DEV002, DEV003] delivered [DEV002]"
+ 11. Hub: доставляет wireBytes всем подписчикам кроме отправителя и возвращает BroadcastResult{Sent, Delivered} (Sent — адресовано, Delivered — попало в канал)
 12. Subscriber goroutine:
     - парсит [0x70, 0x59, payload]
     - Frame{Addr:0x70, Cmd:0x59, Data:payload}

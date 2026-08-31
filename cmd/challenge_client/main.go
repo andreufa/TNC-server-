@@ -42,8 +42,8 @@ const (
 	statusAuthorized byte = 0x01
 
 	// Server address — switch comment to change target.
-	// serverAddr = "localhost:9001"
-	serverAddr = "http://193.109.78.66:9000"
+	serverAddr = "localhost:9001"
+	// serverAddr = "http://193.109.78.66:9000"
 )
 
 // stubPrivateKey is a pre-generated RSA 2048-bit key used when no key file is

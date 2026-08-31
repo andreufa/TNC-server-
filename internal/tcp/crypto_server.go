@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -194,7 +195,7 @@ func (s *CryptoServer) handleConnection(conn net.Conn) {
 		// --- Post-auth: subscribe to Hub for incoming broadcasts ---
 		if ctx.Authenticated && !subscribed {
 			subscribed = true
-			sub = s.hub.Subscribe()
+			sub = s.hub.Subscribe(ctx.DeviceID)
 			go func() {
 				defer s.hub.Unsubscribe(sub)
 				for {
@@ -245,12 +246,16 @@ func (s *CryptoServer) handleConnection(conn net.Conn) {
 					Cmd:  msg.Cmd,
 					Data: msg.Payload,
 				}
-				s.logEvent("broadcast", ctx.DeviceID, "→ "+hex.EncodeToString(EncodeFrame(bcFrame)))
 				senderID := uint64(0)
 				if sub != nil {
 					senderID = sub.ID()
 				}
-				s.hub.Broadcast(wireBytes, senderID)
+				res := s.hub.Broadcast(wireBytes, senderID)
+				log.Printf("crypto-tcp: [%s] broadcast from %q sent %v, delivered %v", remote, ctx.DeviceID, res.Sent, res.Delivered)
+				s.logEvent("broadcast", ctx.DeviceID,
+					"→ "+hex.EncodeToString(EncodeFrame(bcFrame))+
+						" sent ["+strings.Join(res.Sent, ", ")+"]"+
+						" delivered ["+strings.Join(res.Delivered, ", ")+"]")
 
 			case DeliverUnicast:
 				// Echo back to the originating device only.
@@ -265,11 +270,21 @@ func (s *CryptoServer) handleConnection(conn net.Conn) {
 				// For now, fall back to broadcast.
 				log.Printf("crypto-tcp: [%s] DeliverDirect not yet implemented, falling back to broadcast", remote)
 				wireBytes := msg.WireBytes()
+				bcFrame := Frame{
+					Addr: msg.Addr,
+					Cmd:  msg.Cmd,
+					Data: msg.Payload,
+				}
 				senderID := uint64(0)
 				if sub != nil {
 					senderID = sub.ID()
 				}
-				s.hub.Broadcast(wireBytes, senderID)
+				res := s.hub.Broadcast(wireBytes, senderID)
+				log.Printf("crypto-tcp: [%s] broadcast (direct fallback) from %q sent %v, delivered %v", remote, ctx.DeviceID, res.Sent, res.Delivered)
+				s.logEvent("broadcast", ctx.DeviceID,
+					"→ "+hex.EncodeToString(EncodeFrame(bcFrame))+
+						" sent ["+strings.Join(res.Sent, ", ")+"]"+
+						" delivered ["+strings.Join(res.Delivered, ", ")+"]")
 			}
 		}
 
