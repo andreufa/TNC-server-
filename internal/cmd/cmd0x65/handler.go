@@ -17,8 +17,15 @@ import (
 	"net"
 	"time"
 
+	"tnc-server/internal/cmd"
 	"tnc-server/internal/tcp"
 )
+
+// init auto-registers this command handler in the central registry.
+// The blank import in cmd/server/main.go triggers this init().
+func init() {
+	cmd.Register(tcp.CmdAuth, func() tcp.CmdHandler { return &Handler{} })
+}
 
 // authStep tracks the authorization state machine.
 type authStep int
@@ -38,7 +45,11 @@ type Handler struct {
 }
 
 // Handle processes one frame of the AT authorization flow.
-func (h *Handler) Handle(fr tcp.Frame, conn net.Conn, ctx *tcp.CmdContext) ([]byte, error) {
+//
+// Auth is a multi-step stateful protocol. The handler writes challenge and
+// status frames directly to conn.  It returns DeliverNone because all
+// responses are sent inline — no Hub broadcast needed.
+func (h *Handler) Handle(fr tcp.Frame, conn net.Conn, ctx *tcp.CmdContext) (*tcp.Message, error) {
 	switch h.step {
 	case stepWaitParam:
 		return h.handleParamRequest(fr, conn, ctx)
@@ -49,7 +60,7 @@ func (h *Handler) Handle(fr tcp.Frame, conn net.Conn, ctx *tcp.CmdContext) ([]by
 	}
 }
 
-func (h *Handler) handleParamRequest(fr tcp.Frame, conn net.Conn, ctx *tcp.CmdContext) ([]byte, error) {
+func (h *Handler) handleParamRequest(fr tcp.Frame, conn net.Conn, ctx *tcp.CmdContext) (*tcp.Message, error) {
 	// DEBUG ONLY — log incoming param request frame
 	logDebug(ctx, "param request received: Addr=0x%02x Cmd=0x%02x DataLen=%d Data=%s",
 		fr.Addr, fr.Cmd, len(fr.Data), hex.EncodeToString(fr.Data))
@@ -150,7 +161,7 @@ func (h *Handler) handleParamRequest(fr tcp.Frame, conn net.Conn, ctx *tcp.CmdCo
 	return nil, nil
 }
 
-func (h *Handler) handleAuth(fr tcp.Frame, conn net.Conn, ctx *tcp.CmdContext) ([]byte, error) {
+func (h *Handler) handleAuth(fr tcp.Frame, conn net.Conn, ctx *tcp.CmdContext) (*tcp.Message, error) {
 	// DEBUG ONLY — log incoming auth frame
 	logDebug(ctx, "auth: frame received — Addr=0x%02x Cmd=0x%02x DataLen=%d Data=%s",
 		fr.Addr, fr.Cmd, len(fr.Data), hex.EncodeToString(fr.Data))
@@ -274,6 +285,9 @@ func (h *Handler) handleAuth(fr tcp.Frame, conn net.Conn, ctx *tcp.CmdContext) (
 	log.Printf("cmd0x65: device %q authorized", h.deviceID)
 	logEvent(ctx, "auth", "→ authorized")
 
+	// The device is now authorized — record this moment as its last activity.
+	// Subsequent CRC-valid frames refresh last_seen_at in the connection
+	// read loop.
 	if err := ctx.Devices.UpdateLastSeen(context.Background(), h.deviceID); err != nil {
 		log.Printf("cmd0x65: update last seen for %q: %v", h.deviceID, err)
 	}

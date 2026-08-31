@@ -10,10 +10,15 @@ import (
 	"syscall"
 	"time"
 
+	"tnc-server/internal/cmd"
 	"tnc-server/internal/config"
 	"tnc-server/internal/db"
-	"tnc-server/internal/cmd/cmd0x59"
-	"tnc-server/internal/cmd/cmd0x65"
+
+	// Blank imports trigger init() → cmd.Register() for each command.
+	// Add a new blank import here when you create a new command package.
+	_ "tnc-server/internal/cmd/cmd0x59"
+	_ "tnc-server/internal/cmd/cmd0x65"
+
 	"tnc-server/internal/health"
 	"tnc-server/internal/hub"
 	"tnc-server/internal/store"
@@ -82,10 +87,9 @@ func run() error {
 	defer healthMon.Stop()
 
 	// --- Crypto TCP server ---
-	handlers := map[byte]tcp.HandlerFactory{
-		tcp.CmdAuth:    func() tcp.CmdHandler { return &cmd0x65.Handler{} },
-		tcp.CmdRegular: func() tcp.CmdHandler { return &cmd0x59.Handler{} },
-	}
+	// Registry is populated by init() in each command package (see blank imports above).
+	// GetAll() returns a snapshot of the full registry for the server constructor.
+	handlers := cmd.GetAll()
 	cryptoSrv := tcp.NewCryptoServer(cfg.CryptoTCPAddr, devices, h, logChan, handlers)
 	cryptoErr := make(chan error, 1)
 	go func() { cryptoErr <- cryptoSrv.ListenAndServe() }()

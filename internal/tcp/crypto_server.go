@@ -137,16 +137,32 @@ func (s *CryptoServer) handleConnection(conn net.Conn) {
 			return
 		}
 
+		// --- Connection-level frame logging (raw hex) ---
 		log.Printf("crypto-tcp: [%s] frame from %q: Addr=0x%02x Cmd=0x%02x data=%x crc=0x%02x",
 			remote, ctx.DeviceID, fr.Addr, fr.Cmd, fr.Data, raw[len(raw)-1])
 		s.logRawFrame(ctx.DeviceID, raw)
 
-		// Before authentication is complete, only command 0x65 is allowed.
-		if !ctx.Authenticated && fr.Cmd != CmdAuth {
-			log.Printf("crypto-tcp: [%s] refused Cmd=0x%02x before auth", remote, fr.Cmd)
-			continue
+		// --- Refresh last-seen for any CRC-valid frame (authorized only) ---
+		// ReadFrame() has already verified the CRC, so every frame reaching
+		// this point is a valid message from the device. Only authenticated
+		// devices are tracked: refresh last_seen_at regardless of whether the
+		// command is later recognized or processed successfully by a handler.
+		// The frame that completes authorization is covered by the 0x65
+		// handler itself.
+		if ctx.Authenticated {
+			if err := s.devices.UpdateLastSeen(context.Background(), ctx.DeviceID); err != nil {
+				log.Printf("crypto-tcp: [%s] update last seen for %q: %v", remote, ctx.DeviceID, err)
+			}
 		}
 
+		// --- Resolve handler + apply middleware pipeline ---
+		//
+		// Pipeline (outer → inner):
+		//   Frame → AuthGate → Logging → Handler.Handle() → *Message
+		//
+		// AuthGate drops non-auth commands before authentication.
+		// Logging records dispatch and result (only for frames that pass the gate).
+		// The handler itself is created lazily per-connection via the factory.
 		handler := perConnHandlers[fr.Cmd]
 		if handler == nil {
 			factory, ok := s.handlers[fr.Cmd]
@@ -154,11 +170,14 @@ func (s *CryptoServer) handleConnection(conn net.Conn) {
 				log.Printf("crypto-tcp: [%s] no handler for Cmd=0x%02x", remote, fr.Cmd)
 				continue
 			}
-			handler = factory()
+			raw := factory()
+			// Wrap in middleware: AuthGate outermost, Logging inner.
+			handler = Pipeline(raw, AuthGate(), Logging())
 			perConnHandlers[fr.Cmd] = handler
 		}
 
-		broadcastData, err := handler.Handle(fr, conn, ctx)
+		// --- Dispatch to handler (through middleware) ---
+		msg, err := handler.Handle(fr, conn, ctx)
 		if err != nil {
 			log.Printf("crypto-tcp: [%s] handler error for Cmd=0x%02x: %v", remote, fr.Cmd, err)
 			// If auth failed (cmd 0x65 returned error before auth complete), close connection.
@@ -172,7 +191,7 @@ func (s *CryptoServer) handleConnection(conn net.Conn) {
 			continue
 		}
 
-		// After authorization is fully complete (two statuses sent), subscribe to hub.
+		// --- Post-auth: subscribe to Hub for incoming broadcasts ---
 		if ctx.Authenticated && !subscribed {
 			subscribed = true
 			sub = s.hub.Subscribe()
@@ -186,7 +205,7 @@ func (s *CryptoServer) handleConnection(conn net.Conn) {
 						if !ok {
 							return
 						}
-						// Broadcast data format: [Addr(1), Cmd(1), Payload(N)]
+						// Hub delivers [Addr(1)|Cmd(1)|Payload(N)] — unchanged wire format.
 						var bcAddr, bcCmd byte
 						var bcData []byte
 						if len(data) >= 2 {
@@ -212,27 +231,48 @@ func (s *CryptoServer) handleConnection(conn net.Conn) {
 			log.Printf("crypto-tcp: [%s] device %q subscribed to hub (id=%d)", remote, ctx.DeviceID, sub.ID())
 		}
 
-		// Broadcast to other subscribers.
-		if broadcastData != nil {
-			// Build full frame for logging.
-			bcFrame := Frame{
-				Addr: broadcastData[0],
-				Cmd:  broadcastData[1],
-				Data: broadcastData[2:],
+		// --- Route the Message according to its DeliveryMode ---
+		if msg == nil || msg.Mode == DeliverNone {
+			// Handler already sent response(s) directly via conn (e.g. auth handshake).
+			// Nothing to distribute.
+		} else {
+			switch msg.Mode {
+			case DeliverBroadcast:
+				// Fan-out to all OTHER connected devices via Hub.
+				wireBytes := msg.WireBytes()
+				bcFrame := Frame{
+					Addr: msg.Addr,
+					Cmd:  msg.Cmd,
+					Data: msg.Payload,
+				}
+				s.logEvent("broadcast", ctx.DeviceID, "→ "+hex.EncodeToString(EncodeFrame(bcFrame)))
+				senderID := uint64(0)
+				if sub != nil {
+					senderID = sub.ID()
+				}
+				s.hub.Broadcast(wireBytes, senderID)
+
+			case DeliverUnicast:
+				// Echo back to the originating device only.
+				conn.Write(EncodeFrame(Frame{
+					Addr: msg.Addr,
+					Cmd:  msg.Cmd,
+					Data: msg.Payload,
+				}))
+
+			case DeliverDirect:
+				// Future: route to specific device(s) via Hub topic/channel.
+				// For now, fall back to broadcast.
+				log.Printf("crypto-tcp: [%s] DeliverDirect not yet implemented, falling back to broadcast", remote)
+				wireBytes := msg.WireBytes()
+				senderID := uint64(0)
+				if sub != nil {
+					senderID = sub.ID()
+				}
+				s.hub.Broadcast(wireBytes, senderID)
 			}
-			s.logEvent("broadcast", ctx.DeviceID, "→ "+hex.EncodeToString(EncodeFrame(bcFrame)))
-			senderID := uint64(0)
-			if sub != nil {
-				senderID = sub.ID()
-			}
-			s.hub.Broadcast(broadcastData, senderID)
 		}
 
-		if ctx.DeviceID != "" {
-			if err := s.devices.UpdateLastSeen(context.Background(), ctx.DeviceID); err != nil {
-				log.Printf("crypto-tcp: [%s] update last seen for %q: %v", remote, ctx.DeviceID, err)
-			}
-		}
 	}
 }
 

@@ -17,10 +17,19 @@ type CmdContext struct {
 }
 
 // CmdHandler processes an incoming frame for a specific command.
-// The handler may write responses directly to conn.
-// Returns broadcast data (nil if none) to be distributed via the hub.
+//
+// The handler may write responses directly to conn (e.g. multi-step auth
+// handshake) and return nil or DeliverNone to signal «I've already handled it».
+//
+// Return a *Message with a non-none DeliveryMode to tell CryptoServer to
+// distribute the result (broadcast, unicast, direct).  CryptoServer serialises
+// the Message via WireBytes() and either publishes it to the Hub or writes it
+// back to conn, depending on Mode.
+//
+// Returning an error before authentication is complete will cause the
+// connection to be closed (the device failed the handshake).
 type CmdHandler interface {
-	Handle(fr Frame, conn net.Conn, ctx *CmdContext) (broadcast []byte, err error)
+	Handle(fr Frame, conn net.Conn, ctx *CmdContext) (msg *Message, err error)
 }
 
 // HandlerFactory creates a fresh CmdHandler instance for each new connection.
