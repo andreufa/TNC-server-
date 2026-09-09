@@ -61,7 +61,7 @@ func (s *Server) handleDeviceDelete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.devices.SoftDelete(r.Context(), id, user.ID); err != nil {
-		s.deviceActionResult(w, r, err)
+		s.deviceActionResult(w, r, "/", err)
 		return
 	}
 	http.Redirect(w, r, "/?flash=Устройство+удалено", http.StatusSeeOther)
@@ -78,7 +78,7 @@ func (s *Server) handleDeviceService(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.devices.SetInService(r.Context(), id, inService, user.ID); err != nil {
-		s.deviceActionResult(w, r, err)
+		s.deviceActionResult(w, r, "/", err)
 		return
 	}
 	http.Redirect(w, r, "/?flash=Статус+обновлён", http.StatusSeeOther)
@@ -99,7 +99,7 @@ func (s *Server) handleDevicePublicKey(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.devices.SetPublicKey(r.Context(), id, publicKey, user.ID); err != nil {
-		s.deviceActionResult(w, r, err)
+		s.deviceActionResult(w, r, "/", err)
 		return
 	}
 	http.Redirect(w, r, "/?flash=Публичный+ключ+изменён", http.StatusSeeOther)
@@ -120,17 +120,61 @@ func (s *Server) handleDeviceRename(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.devices.Rename(r.Context(), id, newID, user.ID); err != nil {
-		s.deviceActionResult(w, r, err)
+		s.deviceActionResult(w, r, "/", err)
 		return
 	}
 	http.Redirect(w, r, "/?flash=ID+изменён", http.StatusSeeOther)
 }
 
-// deviceActionResult maps store errors to a redirect with a flash message.
-func (s *Server) deviceActionResult(w http.ResponseWriter, r *http.Request, err error) {
-	if errors.Is(err, store.ErrNotFound) {
-		http.Redirect(w, r, "/?flash=Устройство+не+найдено", http.StatusSeeOther)
+// --- Удалённые устройства ---
+
+// handleDeletedList renders the page of soft-deleted devices.
+func (s *Server) handleDeletedList(w http.ResponseWriter, r *http.Request) {
+	devices, err := s.devices.ListDeleted(r.Context())
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	http.Redirect(w, r, "/?flash=Ошибка+операции", http.StatusSeeOther)
+	s.render(w, r, "deleted.html", map[string]any{
+		"Devices": devices,
+		"Flash":   r.URL.Query().Get("flash"),
+	})
+}
+
+// handleDeviceRestore снимает метку логического удаления с устройства.
+func (s *Server) handleDeviceRestore(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	user := userFrom(r.Context())
+	if user == nil {
+		http.Redirect(w, r, "/?flash=Не+авторизован", http.StatusSeeOther)
+		return
+	}
+
+	if err := s.devices.Restore(r.Context(), id, user.ID); err != nil {
+		s.deviceActionResult(w, r, "/devices/deleted", err)
+		return
+	}
+	http.Redirect(w, r, "/devices/deleted?flash=Устройство+восстановлено", http.StatusSeeOther)
+}
+
+// handleDevicePurge полностью удаляет устройство из БД.
+// Применяется только к уже софт-удалённым строкам.
+func (s *Server) handleDevicePurge(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	if err := s.devices.HardDelete(r.Context(), id); err != nil {
+		s.deviceActionResult(w, r, "/devices/deleted", err)
+		return
+	}
+	http.Redirect(w, r, "/devices/deleted?flash=Устройство+удалено+из+БД", http.StatusSeeOther)
+}
+
+// deviceActionResult maps store errors to a redirect with a flash message.
+func (s *Server) deviceActionResult(w http.ResponseWriter, r *http.Request, target string, err error) {
+	if errors.Is(err, store.ErrNotFound) {
+		http.Redirect(w, r, target+"?flash=Устройство+не+найдено", http.StatusSeeOther)
+		return
+	}
+	http.Redirect(w, r, target+"?flash=Ошибка+операции", http.StatusSeeOther)
 }

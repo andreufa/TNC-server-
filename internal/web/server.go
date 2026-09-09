@@ -13,6 +13,9 @@ import (
 //go:embed templates/*.html
 var templatesFS embed.FS
 
+//go:embed static/*
+var staticFS embed.FS
+
 // Server is the HTTP frontend (web form).
 type Server struct {
 	devices   *store.DeviceStore
@@ -49,6 +52,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /login", s.handleLogin)
 	mux.HandleFunc("POST /logout", s.handleLogout)
 
+	// --- Статические ресурсы (логотип / favicon) ---
+	mux.Handle("GET /static/", cacheStatic(http.FileServer(http.FS(staticFS))))
+
 	// --- Обычные пользователи (просмотр) ---
 	// Доступ есть у любого авторизованного пользователя
 	mux.HandleFunc("GET /", requireAuth(s.handleDeviceList))    // список устройств
@@ -62,6 +68,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /devices/{id}/service", requireRoleOrAdmin(models.RolePrivileged, s.handleDeviceService))
 	mux.HandleFunc("POST /devices/{id}/publickey", requireRoleOrAdmin(models.RolePrivileged, s.handleDevicePublicKey))
 	mux.HandleFunc("POST /devices/{id}/rename", requireRoleOrAdmin(models.RolePrivileged, s.handleDeviceRename))
+
+	// --- Удалённые устройства: восстановление / окончательное удаление ---
+	mux.HandleFunc("GET /devices/deleted", requireRoleOrAdmin(models.RolePrivileged, s.handleDeletedList))
+	mux.HandleFunc("POST /devices/{id}/restore", requireRoleOrAdmin(models.RolePrivileged, s.handleDeviceRestore))
+	mux.HandleFunc("POST /devices/{id}/purge", requireRoleOrAdmin(models.RolePrivileged, s.handleDevicePurge))
 
 	// --- Только Админ (всё, что выше + управление пользователями) ---
 	// Строгая проверка: только IsAdmin() == true
@@ -83,4 +94,15 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, dat
 		log.Printf("web: template %s error: %v", name, err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 	}
+}
+
+// cacheStatic adds a long browser-cache header for embedded static assets.
+// embed.FS carries no modification times, so http.FileServer emits no
+// Last-Modified/ETag; without this header browsers would re-download the
+// asset on every page load.
+func cacheStatic(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "public, max-age=86400")
+		next.ServeHTTP(w, r)
+	})
 }

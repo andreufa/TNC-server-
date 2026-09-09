@@ -77,6 +77,49 @@ func (s *DeviceStore) SoftDelete(ctx context.Context, id string, userID uuid.UUI
 		id, userID)
 }
 
+// ListDeleted returns soft-deleted devices, most recently deleted first.
+func (s *DeviceStore) ListDeleted(ctx context.Context) ([]models.Device, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, public_key, registered_at, deleted_at, in_service,
+		       updated_by, updated_at, last_seen_at,
+		       (last_seen_at IS NOT NULL AND last_seen_at > NOW() - INTERVAL '`+OfflineThreshold.String()+`') AS is_online
+		FROM devices
+		WHERE deleted_at IS NOT NULL
+		ORDER BY deleted_at DESC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []models.Device
+	for rows.Next() {
+		var d models.Device
+		if err := rows.Scan(&d.ID, &d.PublicKey, &d.RegisteredAt, &d.DeletedAt,
+			&d.InService, &d.UpdatedBy, &d.UpdatedAt, &d.LastSeenAt, &d.IsOnline); err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+// Restore clears the soft-delete mark on a device, keeping all its other
+// attributes (public key, in_service) intact.
+func (s *DeviceStore) Restore(ctx context.Context, id string, userID uuid.UUID) error {
+	return s.execAffecting(ctx,
+		`UPDATE devices SET deleted_at = NULL, updated_by = $2, updated_at = now()
+		 WHERE id = $1 AND deleted_at IS NOT NULL`,
+		id, userID)
+}
+
+// HardDelete permanently removes a soft-deleted device from the DB.
+// It only affects rows that are already marked as deleted.
+func (s *DeviceStore) HardDelete(ctx context.Context, id string) error {
+	return s.execAffecting(ctx,
+		`DELETE FROM devices WHERE id = $1 AND deleted_at IS NOT NULL`,
+		id)
+}
 func (s *DeviceStore) SetInService(ctx context.Context, id string, inService bool, userID uuid.UUID) error {
 	return s.execAffecting(ctx,
 		`UPDATE devices SET in_service = $2, updated_by = $3, updated_at = now()

@@ -6,6 +6,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>TNC-server</title>
+  <link rel="icon" type="image/png" href="/static/logo.png">
   <style>
     body {
       font-family: system-ui, sans-serif;
@@ -147,10 +148,11 @@
 
 <body>
   <header>
-    <strong>TNC-server</strong>
+    <span style="display:flex;align-items:center;gap:8px;"><img src="/static/logo.png" alt="Логотип" width="28" height="28"><strong>TNC-server</strong></span>
     {{if .User}}
     <a href="/">Устройства</a>
     <a href="/logs">Логи</a>
+    {{if or (eq (printf "%s" .User.Role) "privileged") (eq (printf "%s" .User.Role) "admin")}}<a href="/devices/deleted">Удалённые</a>{{end}}
     {{if eq (printf "%s" .User.Role) "admin"}}<a href="/users">Пользователи</a>{{end}}
     <span class="spacer"></span>
     <span>{{.User.Username}} ({{.User.Role}})</span>

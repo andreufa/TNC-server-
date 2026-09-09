@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Вход — TNC-server</title>
+  <link rel="icon" type="image/png" href="/static/logo.png">
   <style>
     body { font-family: system-ui, sans-serif; background: #2d3748; display: flex; min-height: 100vh; margin: 0; align-items: center; justify-content: center; }
     .box { background: #fff; padding: 32px; border-radius: 8px; width: 320px; box-shadow: 0 10px 30px rgba(0,0,0,.3); }
@@ -16,6 +17,7 @@
 </head>
 <body>
   <form class="box" method="post" action="/login">
+    <div style="text-align:center;margin-bottom:12px;"><img src="/static/logo.png" alt="Логотип" width="48" height="48"></div>
     <h1>TNC-server</h1>
     {{if .Error}}<div class="err">{{.Error}}</div>{{end}}
     <label>Имя пользователя</label>

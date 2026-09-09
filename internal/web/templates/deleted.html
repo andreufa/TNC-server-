@@ -1,0 +1,40 @@
+{{define "deleted.html"}}
+{{template "top" .}}
+
+<h1>Удалённые устройства</h1>
+{{if .Flash}}<div class="flash">{{.Flash}}</div>{{end}}
+
+<table>
+  <thead>
+    <tr>
+      <th>ID</th>
+      <th>Зарегистрировано</th>
+      <th>Удалено</th>
+      <th>Действия</th>
+    </tr>
+  </thead>
+  <tbody>
+    {{range .Devices}}
+    <tr>
+      <td><strong>{{.ID}}</strong></td>
+      <td>{{.RegisteredAt.Format "2006-01-02 15:04"}}</td>
+      <td>{{if .DeletedAt}}{{.DeletedAt.Format "2006-01-02 15:04:05"}}{{else}}—{{end}}</td>
+      <td>
+        <div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center;">
+          <form style="display: inline; margin: 0;" method="post" action="/devices/{{.ID}}/restore">
+            <button type="submit">Восстановить</button>
+          </form>
+          <form style="display: inline; margin: 0;" method="post" action="/devices/{{.ID}}/purge"
+                onsubmit="return confirm('Удалить устройство {{.ID}} из базы данных навсегда?');">
+            <button class="danger" type="submit">Удалить навсегда</button>
+          </form>
+        </div>
+      </td>
+    </tr>
+    {{else}}
+    <tr><td colspan="4">Нет удалённых устройств</td></tr>
+    {{end}}
+  </tbody>
+</table>
+{{template "bottom" .}}
+{{end}}
