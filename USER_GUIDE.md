@@ -428,3 +428,44 @@ Challenge nonce                     │ 32 bytes                            │ 
 ├─────────────────────────────────────┼─────────────────────────────────────┼─────────────────────────────────────┤
 RSA signature                       │ 256 bytes                           │ N/A (opaque blob)                   │
 └─────────────────────────────────────┴─────────────────────────────────────┴─────────────────────────────────────┘
+
+
+
+Все четыре переменные имеют дефолты в сервере, поэтому они необязательны — добавляются, только если хотите управлять ими извне.
+
+docker-compose.yml → в блок environment сервиса server, после BOOTSTRAP_ADMIN_PASSWORD:
+
+      LOG_DIR: ${LOG_DIR:-logs}
+      LOG_RETENTION_DAYS: ${LOG_RETENTION_DAYS:-7}
+      LOG_MAX_FILE_MB: ${LOG_MAX_FILE_MB:-100}
+      MEASUREMENT_RETENTION_DAYS: ${MEASUREMENT_RETENTION_DAYS:-7}
+
+`.env` → новые строки:
+
+# Файловые логи устройств (docs/logging.md)
+LOG_DIR=logs
+LOG_RETENTION_DAYS=7
+LOG_MAX_FILE_MB=100
+# Хранение измерений 0x59 для графиков (вкладка «Графики»)
+MEASUREMENT_RETENTION_DAYS=7
+
+Нюанс: volume в compose примонтирован как ./logs:/app/logs. Если поменяете LOG_DIR, придётся синхронно поправить и путь в volumes. Если менять не планируете — можно вообще не добавлять эти четыре строки никуда, всё заработает на дефолтах.
+
+2. Текст коммита
+
+В стиле ваших прежних коммитов (короткий):
+
+file device logs (txt + hex, 7 days) and 0x59 charts page
+
+Развёрнутый вариант:
+
+feat: device file logs + 0x59 measurements charts
+
+- frame logs: logs/YYYY-MM-DD/<DID>.txt (decoded 0x59) and <DID>.hex (raw IN frames)
+- retention 7 days, cleanup at startup + daily (docs/logging.md)
+- measurements table for 0x59 with async batched inserts, 7-day retention
+- charts page: uPlot, off1-3 series, range presets, auto-refresh + manual refresh
+- API: GET /api/measurements?device=<id>&hours=<n>
+- config: LOG_DIR, LOG_RETENTION_DAYS, LOG_MAX_FILE_MB, MEASUREMENT_RETENTION_DAYS
+
+Замечание по коммиту: в рабочем дереве, помимо моих изменений, лежат ваши незакоммиченные правки Dockerfile (порты 8181/6407, Go 1.27) и docker-compose.yml (сеть, порты). Если хотите держать их отдельно от фич логирования/графиков — лучше закоммитить их первым отдельным коммитом (например, switch to ports 8181/6407 and docker network), а затем уже этот. Могу применить изменения в compose/.env или подготовить коммиты — скажите.

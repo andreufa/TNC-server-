@@ -10,3 +10,4 @@
 
 # Logs
 *.log
+/logs/

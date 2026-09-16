@@ -1,14 +1,15 @@
-
 services:
   db:
     image: postgres:16-alpine
     container_name: tnc-postgres
+    networks:
+      - tnc-server-net
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
-    ports:
-      - "5432:5432"
+    # ports:
+    #   - "5432:5432"
     volumes:
       - tnc-pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -18,30 +19,30 @@ services:
       retries: 5
 
   server:
-    build: .
-    # image: ghcr.io/andreufa/tnc-server:1.0
+    # build: .
+    image: tnc-server:local
     container_name: tnc-server
-    # Пробрасываем порты на хост
+    networks:
+      - tnc-server-net
     ports:
-      - "8080:8080"
-      - "9001:9001"
-    # Явно передаём переменные в контейнер.
-    # Если переменной нет в .env или CI, будет использовано значение после :-
+      - "8182:8181"
+      - "6408:6407"
     environment:
-      HTTP_ADDR: ${HTTP_ADDR:-:8080}
-      CRYPTO_TCP_ADDR: ${CRYPTO_TCP_ADDR:-:9001}
+      HTTP_ADDR: ${HTTP_ADDR:-:8181}
+      CRYPTO_TCP_ADDR: ${CRYPTO_TCP_ADDR:-:6407}
       DB_HOST: ${DB_HOST:-db}
       DB_PORT: ${DB_PORT:-5432}
       DB_USER: ${DB_USER:-tnc}
-      DB_PASSWORD: ${DB_PASSWORD:-tnc}
+      DB_PASSWORD: ${DB_PASSWORD:-${POSTGRES_PASSWORD:-niima2026}}
       DB_NAME: ${DB_NAME:-tnc}
       DB_SSL_MODE: ${DB_SSL_MODE:-disable}
       SESSION_SECRET: ${SESSION_SECRET}
       BOOTSTRAP_ADMIN_USER: ${BOOTSTRAP_ADMIN_USER}
       BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD}
-    # env_file оставляем только для fallback (если вдруг что-то не передали)
     env_file:
       - .env
+    volumes:
+      - ./logs:/app/logs
     depends_on:
       db:
         condition: service_healthy
@@ -49,3 +50,10 @@ services:
 
 volumes:
   tnc-pgdata:
+
+networks: 
+  tnc-server-net:
+     driver: bridge
+     ipam:
+      config:
+        - subnet: 10.90.90.0/24

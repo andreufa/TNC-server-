@@ -18,15 +18,16 @@ var staticFS embed.FS
 
 // Server is the HTTP frontend (web form).
 type Server struct {
-	devices   *store.DeviceStore
-	users     *store.UserStore
-	sessions  *store.SessionStore
-	tmpl      *template.Template
-	logServer *LogServer // добавляем
+	devices      *store.DeviceStore
+	users        *store.UserStore
+	sessions     *store.SessionStore
+	measurements *store.MeasurementStore
+	tmpl         *template.Template
+	logServer    *LogServer // добавляем
 }
 
 // NewServer builds the web server and parses templates.
-func NewServer(devices *store.DeviceStore, users *store.UserStore, sessions *store.SessionStore, logChan <-chan string) (*Server, error) {
+func NewServer(devices *store.DeviceStore, users *store.UserStore, sessions *store.SessionStore, logChan <-chan string, measurements *store.MeasurementStore) (*Server, error) {
 	tmpl, err := template.ParseFS(templatesFS, "templates/*.html")
 	if err != nil {
 		return nil, err
@@ -35,11 +36,12 @@ func NewServer(devices *store.DeviceStore, users *store.UserStore, sessions *sto
 	logServer := NewLogServer(logChan)
 
 	return &Server{
-		devices:   devices,
-		users:     users,
-		sessions:  sessions,
-		tmpl:      tmpl,
-		logServer: logServer,
+		devices:      devices,
+		users:        users,
+		sessions:     sessions,
+		measurements: measurements,
+		tmpl:         tmpl,
+		logServer:    logServer,
 	}, nil
 }
 
@@ -60,6 +62,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /", requireAuth(s.handleDeviceList))    // список устройств
 	mux.HandleFunc("GET /logs", requireAuth(s.handleLogsPage))  // список логов
 	mux.HandleFunc("GET /logs/ws", requireAuth(s.handleLogsWS)) // WebSocket логов
+
+	// Графики измерений 0x59 (доступны всем авторизованным)
+	mux.HandleFunc("GET /charts", requireAuth(s.handleChartsPage))                // страница графиков
+	mux.HandleFunc("GET /api/measurements", requireAuth(s.handleMeasurementsAPI)) // данные для графиков
 
 	// --- Привилегированные (и админ тоже) ---
 	// Используем requireRoleOrAdmin: доступ, если role == privileged ИЛИ IsAdmin() == true

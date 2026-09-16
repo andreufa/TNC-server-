@@ -20,11 +20,13 @@ import (
 
 // CryptoServer accepts TCP connections and dispatches frames to command handlers.
 type CryptoServer struct {
-	addr     string
-	devices  *store.DeviceStore
-	hub      *hub.Hub
-	logChan  chan<- string
-	handlers map[byte]HandlerFactory // cmd → factory (creates per-connection handler)
+	addr         string
+	devices      *store.DeviceStore
+	hub          *hub.Hub
+	logChan      chan<- string
+	logs         *FrameLogger
+	measurements *store.MeasurementStore
+	handlers     map[byte]HandlerFactory // cmd → factory (creates per-connection handler)
 
 	ln   net.Listener
 	wg   sync.WaitGroup
@@ -32,14 +34,18 @@ type CryptoServer struct {
 }
 
 // NewCryptoServer creates a new crypto TCP server with the given command handler factories.
-func NewCryptoServer(addr string, devices *store.DeviceStore, h *hub.Hub, logChan chan<- string, handlers map[byte]HandlerFactory) *CryptoServer {
+// logs — общий логгер файловых логов устройств (nil — отключено).
+// measurements — очередь хранения измерений 0x59 (nil — отключено).
+func NewCryptoServer(addr string, devices *store.DeviceStore, h *hub.Hub, logChan chan<- string, handlers map[byte]HandlerFactory, logs *FrameLogger, measurements *store.MeasurementStore) *CryptoServer {
 	return &CryptoServer{
-		addr:     addr,
-		devices:  devices,
-		hub:      h,
-		logChan:  logChan,
-		handlers: handlers,
-		quit:     make(chan struct{}),
+		addr:         addr,
+		devices:      devices,
+		hub:          h,
+		logChan:      logChan,
+		logs:         logs,
+		measurements: measurements,
+		handlers:     handlers,
+		quit:         make(chan struct{}),
 	}
 }
 
@@ -108,14 +114,22 @@ func (s *CryptoServer) handleConnection(conn net.Conn) {
 
 	// Per-connection context shared across command handlers.
 	ctx := &CmdContext{
-		Devices: s.devices,
-		Hub:     s.hub,
-		LogChan: s.logChan,
+		Devices:      s.devices,
+		Hub:          s.hub,
+		LogChan:      s.logChan,
+		Logger:       s.logs,
+		Measurements: s.measurements,
+	}
+
+	// Файловые логи сессии закрываются при разрыве соединения.
+	if s.logs != nil {
+		defer func() { s.logs.Close(ctx.DeviceID) }()
 	}
 
 	var (
 		subscribed bool
 		sub        *hub.Subscriber
+		logsOpened bool
 	)
 
 	// Per-connection handler instances created from factories on first use.
@@ -153,6 +167,17 @@ func (s *CryptoServer) handleConnection(conn net.Conn) {
 		if ctx.Authenticated {
 			if err := s.devices.UpdateLastSeen(context.Background(), ctx.DeviceID); err != nil {
 				log.Printf("crypto-tcp: [%s] update last seen for %q: %v", remote, ctx.DeviceID, err)
+			}
+			// Файловые логи (docs/logging.md): открываются при первой
+			// авторизации; hex-строка пишется на каждый принятый фрейм.
+			if s.logs != nil {
+				if !logsOpened {
+					logsOpened = true
+					if err := s.logs.Open(ctx.DeviceID); err != nil {
+						log.Printf("crypto-tcp: [%s] file log open for %q: %v", remote, ctx.DeviceID, err)
+					}
+				}
+				s.logs.LogHex(ctx.DeviceID, raw)
 			}
 		}
 

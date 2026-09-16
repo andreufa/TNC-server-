@@ -1,5 +1,5 @@
 # --- Stage 1: Build ---
-FROM golang:1.25-alpine AS builder
+FROM golang:1.27-alpine AS builder
 
 RUN apk add --no-cache ca-certificates git
 
@@ -26,7 +26,7 @@ COPY --from=builder /build/tnc-server .
 # ВАЖНО: копируем папку с миграциями
 COPY --from=builder /build/migrations ./migrations
 
-EXPOSE 8080
-EXPOSE 9001
+EXPOSE 8181
+EXPOSE 6407
 
 CMD ["./tnc-server"]

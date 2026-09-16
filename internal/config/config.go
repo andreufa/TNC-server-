@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"strconv"
 )
 
 // Config holds all runtime configuration for the server.
@@ -21,6 +22,12 @@ type Config struct {
 	SessionSecret      string
 	BootstrapAdminUser string
 	BootstrapAdminPass string
+
+	LogDir           string
+	LogRetentionDays int
+	LogMaxFileMB     int64
+
+	MeasurementRetentionDays int
 }
 
 func Load() (*Config, error) {
@@ -37,6 +44,12 @@ func Load() (*Config, error) {
 		SessionSecret:      getenv("SESSION_SECRET", "dev-secret-change-in-production"),
 		BootstrapAdminUser: getenv("BOOTSTRAP_ADMIN_USER", "admin"),
 		BootstrapAdminPass: getenv("BOOTSTRAP_ADMIN_PASSWORD", "admin"),
+
+		LogDir:           getenv("LOG_DIR", "logs"),
+		LogRetentionDays: getenvInt("LOG_RETENTION_DAYS", 7),
+		LogMaxFileMB:     getenvInt64("LOG_MAX_FILE_MB", 100),
+
+		MeasurementRetentionDays: getenvInt("MEASUREMENT_RETENTION_DAYS", 7),
 	}
 
 	return cfg, nil
@@ -59,6 +72,24 @@ func (c *Config) DatabaseURL() string {
 func getenv(key, def string) string {
 	if v, ok := os.LookupEnv(key); ok && v != "" {
 		return v
+	}
+	return def
+}
+
+func getenvInt(key string, def int) int {
+	if v, ok := os.LookupEnv(key); ok && v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
+	}
+	return def
+}
+
+func getenvInt64(key string, def int64) int64 {
+	if v, ok := os.LookupEnv(key); ok && v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			return n
+		}
 	}
 	return def
 }

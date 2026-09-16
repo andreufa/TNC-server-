@@ -14,6 +14,12 @@ type CmdContext struct {
 	LogChan       chan<- string
 	DeviceID      string // set when device is identified (param request)
 	Authenticated bool   // set after authorization is fully complete (two status responses sent)
+
+	// Logger — файловые логи устройств (docs/logging.md); nil, если отключены.
+	Logger *FrameLogger
+
+	// Measurements — очередь хранения измерений 0x59 для графиков (nil — отключено).
+	Measurements *store.MeasurementStore
 }
 
 // CmdHandler processes an incoming frame for a specific command.

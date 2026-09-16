@@ -57,6 +57,11 @@ func run() error {
 	users := store.NewUserStore(pool)
 	sessions := store.NewSessionStore(pool)
 
+	// --- измерения 0x59 для графиков ---
+	measurements := store.NewMeasurementStore(pool, cfg.MeasurementRetentionDays)
+	measurements.Start()
+	defer measurements.Close()
+
 	if err := users.EnsureBootstrap(ctx, cfg.BootstrapAdminUser, cfg.BootstrapAdminPass); err != nil {
 		return err
 	}
@@ -76,6 +81,25 @@ func run() error {
 	// --- log channel ---
 	logChan := make(chan string, 1000)
 
+	// --- файловые логи устройств (docs/logging.md) ---
+	frameLogs := tcp.NewFrameLogger(cfg.LogDir, cfg.LogMaxFileMB<<20)
+	if n, err := tcp.CleanupOldLogs(cfg.LogDir, cfg.LogRetentionDays); err != nil {
+		log.Printf("logs: cleanup error: %v", err)
+	} else if n > 0 {
+		log.Printf("logs: removed %d day folder(s) older than %d days", n, cfg.LogRetentionDays)
+	}
+	go func() {
+		t := time.NewTicker(24 * time.Hour)
+		defer t.Stop()
+		for range t.C {
+			if n, err := tcp.CleanupOldLogs(cfg.LogDir, cfg.LogRetentionDays); err != nil {
+				log.Printf("logs: cleanup error: %v", err)
+			} else if n > 0 {
+				log.Printf("logs: removed %d day folder(s) older than %d days", n, cfg.LogRetentionDays)
+			}
+		}
+	}()
+
 	// --- hub (pub/sub for device broadcasts) ---
 	h := hub.New()
 	go h.Run()
@@ -90,12 +114,12 @@ func run() error {
 	// Registry is populated by init() in each command package (see blank imports above).
 	// GetAll() returns a snapshot of the full registry for the server constructor.
 	handlers := cmd.GetAll()
-	cryptoSrv := tcp.NewCryptoServer(cfg.CryptoTCPAddr, devices, h, logChan, handlers)
+	cryptoSrv := tcp.NewCryptoServer(cfg.CryptoTCPAddr, devices, h, logChan, handlers, frameLogs, measurements)
 	cryptoErr := make(chan error, 1)
 	go func() { cryptoErr <- cryptoSrv.ListenAndServe() }()
 
 	// --- HTTP server ---
-	webSrv, err := web.NewServer(devices, users, sessions, logChan)
+	webSrv, err := web.NewServer(devices, users, sessions, logChan, measurements)
 	if err != nil {
 		return err
 	}
@@ -135,6 +159,7 @@ func run() error {
 	}
 
 	cryptoSrv.Shutdown()
+	frameLogs.CloseAll()
 	close(logChan)
 
 	log.Print("shutdown: complete")

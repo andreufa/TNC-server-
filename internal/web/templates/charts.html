@@ -1,0 +1,145 @@
+{{define "charts.html"}}
+{{template "top" .}}
+
+<h1>Графики измерений (0x59)</h1>
+
+<div class="card">
+  <div class="row">
+    <label>Устройство
+      <select id="deviceSel">
+        {{range .Devices}}<option value="{{.ID}}">{{.ID}}</option>{{end}}
+      </select>
+    </label>
+    <label>Диапазон
+      <select id="rangeSel">
+        <option value="1">1 час</option>
+        <option value="6" selected>6 часов</option>
+        <option value="24">24 часа</option>
+        <option value="72">3 дня</option>
+        <option value="168">7 дней</option>
+      </select>
+    </label>
+    <button id="refreshBtn" class="primary" type="button">Обновить</button>
+    <label class="chk"><input type="checkbox" id="autoChk" checked> автообновление (5 с)</label>
+    <span id="status" style="color:#666;"></span>
+  </div>
+  <div id="chart" style="width:100%;height:420px;margin-top:12px;"></div>
+  <div id="stats" style="margin-top:8px;color:#666;font-size:.85rem;"></div>
+</div>
+
+{{if not .Devices}}
+<p>Нет зарегистрированных устройств — графики недоступны.</p>
+{{end}}
+
+<script src="/static/uplot.iife.min.js"></script>
+<script>
+(function () {
+  var COLORS = ['#e53e3e', '#38a169', '#3182ce'];
+  var plot = null;
+  var timer = null;
+
+  var deviceSel = document.getElementById('deviceSel');
+  var rangeSel = document.getElementById('rangeSel');
+  var autoChk = document.getElementById('autoChk');
+  var refreshBtn = document.getElementById('refreshBtn');
+  var statusEl = document.getElementById('status');
+  var statsEl = document.getElementById('stats');
+  var chartEl = document.getElementById('chart');
+
+  if (!deviceSel || deviceSel.options.length === 0) return; // нет устройств
+
+  var qsDevice = new URLSearchParams(location.search).get('device');
+  if (qsDevice) deviceSel.value = qsDevice;
+
+  function fmt(v) {
+    if (v === null || v === undefined) return '—';
+    return Number(v).toFixed(6);
+  }
+
+  function render(points) {
+    chartEl.textContent = '';
+    var t = [], o1 = [], o2 = [], o3 = [];
+    for (var i = 0; i < points.length; i++) {
+      t.push(points[i].ts);
+      o1.push(points[i].off1);
+      o2.push(points[i].off2);
+      o3.push(points[i].off3);
+    }
+
+    if (t.length === 0) {
+      chartEl.textContent = 'Нет данных за выбранный период';
+      statsEl.textContent = '';
+      plot = null;
+      return;
+    }
+
+    var opts = {
+      height: 420,
+      scales: { x: { time: true } },
+      series: [
+        {},
+        { label: 'off1 (м)', stroke: COLORS[0], width: 1.4 },
+        { label: 'off2 (м)', stroke: COLORS[1], width: 1.4 },
+        { label: 'off3 (м)', stroke: COLORS[2], width: 1.4 }
+      ],
+      axes: [
+        {},
+        { label: 'метры', size: 70 }
+      ],
+      legend: { show: true },
+      cursor: { drag: { x: true, y: false } }
+    };
+
+    var data = [t, o1, o2, o3];
+    if (plot) {
+      plot.setData(data);
+    } else {
+      plot = new uPlot(opts, data, chartEl);
+      window.addEventListener('resize', function () {
+        if (plot) plot.setSize({ width: chartEl.clientWidth, height: 420 });
+      });
+    }
+
+    var last = points[points.length - 1];
+    statsEl.textContent =
+      'Последняя точка: off1=' + fmt(last.off1) + ' м · off2=' + fmt(last.off2) + ' м · off3=' + fmt(last.off3) +
+      ' м · valid=0b' + (last.validity >>> 0).toString(2).padStart(8, '0') +
+      ' · всего точек: ' + points.length;
+  }
+
+  async function refresh() {
+    var device = deviceSel.value;
+    var hours = rangeSel.value;
+    statusEl.textContent = 'загрузка…';
+    try {
+      var resp = await fetch('/api/measurements?device=' + encodeURIComponent(device) + '&hours=' + hours);
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      var data = await resp.json();
+      render(data.points);
+      statusEl.textContent = 'обновлено: ' + new Date().toLocaleTimeString('ru-RU');
+    } catch (e) {
+      statusEl.textContent = 'ошибка: ' + (e && e.message ? e.message : e);
+    }
+  }
+
+  refreshBtn.addEventListener('click', refresh);
+  deviceSel.addEventListener('change', refresh);
+  rangeSel.addEventListener('change', refresh);
+
+  function applyAuto() {
+    if (autoChk.checked) {
+      if (!timer) timer = setInterval(refresh, 5000);
+    } else {
+      clearInterval(timer);
+      timer = null;
+    }
+  }
+  autoChk.addEventListener('change', applyAuto);
+  applyAuto();
+  refresh();
+})();
+</script>
+<style>main { max-width: 1200px; }</style>
+
+{{template "bottom" .}}
+{{end}}
