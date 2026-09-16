@@ -64,7 +64,7 @@ func TestFormatLog(t *testing.T) {
 	}
 
 	got := m.FormatLog(ts, "N-10")
-	want := "2026-09-16 12:34:56.789  N-10  0x59  msg=12345  utc=2026-09-16T12:34:56.789Z  off1=+12.345000  off2=+0.001000(invalid)  off3=-7.890000  static=10  valid=0b00000101"
+	want := "2026-09-16 12:34:56.789  N-10  0x59  Номер_сообщения=12345  UTC=2026-09-16T12:34:56.789Z  iekf_hw_offset_1=+12.345000  iekf_hw_offset_2=+0.001000(invalid)  iekf_hw_offset_3=-7.890000  static_cnt=10  validity=0b00000101"
 	if got != want {
 		t.Errorf("FormatLog:\n got: %q\nwant: %q", got, want)
 	}

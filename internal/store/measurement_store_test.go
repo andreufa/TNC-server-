@@ -102,3 +102,35 @@ func TestDownsampleAllNaN(t *testing.T) {
 		t.Errorf("n = %d, want 2", pts[0].N)
 	}
 }
+
+func TestApplyValidity(t *testing.T) {
+	// validity=0b101: бит 1 сброшен → iekf_hw_offset_2 невалиден (NaN).
+	p := applyValidity(raw(1000, 1, 2, 3, 0b101))
+	if p.off1 != 1 || p.off3 != 3 {
+		t.Errorf("валидные слоты должны сохраниться: %+v", p)
+	}
+	if !math.IsNaN(p.off2) {
+		t.Errorf("off2 должен стать NaN, got %v", p.off2)
+	}
+	if p.validity != 0b101 {
+		t.Errorf("validity не должен меняться, got %b", p.validity)
+	}
+
+	// Невалидный слот не попадает на график: null в JSON.
+	pts := downsample([]rawPoint{p}, 100)
+	if len(pts) != 1 {
+		t.Fatalf("len = %d, want 1", len(pts))
+	}
+	if pts[0].Off1 == nil || *pts[0].Off1 != 1 {
+		t.Errorf("Off1 должен остаться, got %v", pts[0].Off1)
+	}
+	if pts[0].Off2 != nil {
+		t.Errorf("Off2 должен быть nil (невалиден), got %v", *pts[0].Off2)
+	}
+
+	// Все биты валидности установлены → значения сохраняются.
+	p2 := applyValidity(raw(2000, 4, 5, 6, 0b111))
+	if p2.off1 != 4 || p2.off2 != 5 || p2.off3 != 6 {
+		t.Errorf("0b111 должен сохранить все слоты: %+v", p2)
+	}
+}

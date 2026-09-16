@@ -25,12 +25,12 @@ const (
 // (null в JSON — разрыв на графике), если значение отсутствует: NaN/±Inf
 // в кадре или все сэмплы корзины невалидны.
 type Point struct {
-	Ts       int64    `json:"ts"`       // Unix-миллисекунды
-	Off1     *float64 `json:"off1"`     // метры
-	Off2     *float64 `json:"off2"`     // метры
-	Off3     *float64 `json:"off3"`     // метры
-	Validity uint32   `json:"validity"` // битовая маска (для агрегата — побитовое И)
-	N        int      `json:"n"`        // исходных сэмплов в точке (1 — сырая)
+	Ts       int64    `json:"utc"`              // время сообщения, Unix-миллисекунды (UTC из кадра)
+	Off1     *float64 `json:"iekf_hw_offset_1"` // метры
+	Off2     *float64 `json:"iekf_hw_offset_2"` // метры
+	Off3     *float64 `json:"iekf_hw_offset_3"` // метры
+	Validity uint32   `json:"validity"`         // битовая маска (для агрегата — побитовое И)
+	N        int      `json:"n"`                // исходных сэмплов в точке (1 — сырая)
 }
 
 // MeasurementStore пишет измерения в таблицу measurements асинхронно (канал +
@@ -185,7 +185,7 @@ func (s *MeasurementStore) QueryRange(ctx context.Context, deviceID string, from
 		if err := rows.Scan(&ts, &o1, &o2, &o3, &validity); err != nil {
 			return nil, err
 		}
-		raw = append(raw, rawPoint{ts: ts, off1: o1, off2: o2, off3: o3, validity: uint32(validity)})
+		raw = append(raw, applyValidity(rawPoint{ts: ts, off1: o1, off2: o2, off3: o3, validity: uint32(validity)}))
 	}
 	return downsample(raw, maxPoints), rows.Err()
 }
@@ -196,6 +196,24 @@ type rawPoint struct {
 	off2     float64
 	off3     float64
 	validity uint32
+}
+
+// applyValidity зануляет невалидные слоты (NaN): бит 0 (1<<0) — валиден
+// iekf_hw_offset_1, бит 1 (1<<1) — iekf_hw_offset_2, бит 2 (1<<2) —
+// iekf_hw_offset_3 (docs/auth/protocol/cmd0x59.md). NaN дальше отбрасывается
+// при прореживании → null в JSON (разрыв на графике) — невалидные поправки
+// на графике не отображаются.
+func applyValidity(p rawPoint) rawPoint {
+	if p.validity&(1<<0) == 0 {
+		p.off1 = math.NaN()
+	}
+	if p.validity&(1<<1) == 0 {
+		p.off2 = math.NaN()
+	}
+	if p.validity&(1<<2) == 0 {
+		p.off3 = math.NaN()
+	}
+	return p
 }
 
 // downsample прореживает сырые точки до maxPoints корзин, усредняя значения

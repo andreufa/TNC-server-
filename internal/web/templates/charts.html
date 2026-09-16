@@ -1,7 +1,9 @@
 {{define "charts.html"}}
 {{template "top" .}}
 
-<h1>Графики измерений (0x59)</h1>
+<link rel="stylesheet" href="/static/uplot.min.css">
+
+<h1>Поправки (0x59)</h1>
 
 <div class="card">
   <div class="row">
@@ -21,90 +23,155 @@
     </label>
     <button id="refreshBtn" class="primary" type="button">Обновить</button>
     <label class="chk"><input type="checkbox" id="autoChk" checked> автообновление (5 с)</label>
+    <label class="chk" title="Отклонение от первой точки выбранного диапазона — видна динамика поправок">
+      <input type="checkbox" id="deltaChk" checked> Δ от начала диапазона
+    </label>
     <span id="status" style="color:#666;"></span>
   </div>
+
+  <div id="legend" style="display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin-top:10px;font-size:.85rem;">
+    <label class="chk"><input type="checkbox" class="seriesChk" data-idx="0" checked>
+      <span style="display:inline-block;width:10px;height:10px;background:#e53e3e;border-radius:2px;"></span> iekf_hw_offset_1</label>
+    <label class="chk"><input type="checkbox" class="seriesChk" data-idx="1" checked>
+      <span style="display:inline-block;width:10px;height:10px;background:#38a169;border-radius:2px;"></span> iekf_hw_offset_2</label>
+    <label class="chk"><input type="checkbox" class="seriesChk" data-idx="2" checked>
+      <span style="display:inline-block;width:10px;height:10px;background:#3182ce;border-radius:2px;"></span> iekf_hw_offset_3</label>
+  </div>
+
   <div id="chart" style="width:100%;height:420px;margin-top:12px;"></div>
   <div id="stats" style="margin-top:8px;color:#666;font-size:.85rem;"></div>
 </div>
 
 {{if not .Devices}}
-<p>Нет зарегистрированных устройств — графики недоступны.</p>
+<p>Нет зарегистрированных устройств — поправки недоступны.</p>
 {{end}}
 
 <script src="/static/uplot.iife.min.js"></script>
 <script>
 (function () {
   var COLORS = ['#e53e3e', '#38a169', '#3182ce'];
+  var NAMES = ['iekf_hw_offset_1', 'iekf_hw_offset_2', 'iekf_hw_offset_3'];
   var plot = null;
   var timer = null;
 
   var deviceSel = document.getElementById('deviceSel');
   var rangeSel = document.getElementById('rangeSel');
   var autoChk = document.getElementById('autoChk');
+  var deltaChk = document.getElementById('deltaChk');
   var refreshBtn = document.getElementById('refreshBtn');
   var statusEl = document.getElementById('status');
   var statsEl = document.getElementById('stats');
   var chartEl = document.getElementById('chart');
+  var legendChks = document.querySelectorAll('.seriesChk');
 
   if (!deviceSel || deviceSel.options.length === 0) return; // нет устройств
 
+  // В течение сессии помним выбранное устройство: переключение на другие
+  // вкладки и обратно не сбрасывает выбор (sessionStorage живёт на вкладку).
+  var savedDevice = sessionStorage.getItem('chartsDevice');
   var qsDevice = new URLSearchParams(location.search).get('device');
-  if (qsDevice) deviceSel.value = qsDevice;
+  var selected = savedDevice || qsDevice;
+  if (selected) {
+    deviceSel.value = selected;
+    sessionStorage.setItem('chartsDevice', selected);
+  }
 
   function fmt(v) {
     if (v === null || v === undefined) return '—';
     return Number(v).toFixed(6);
   }
 
-  function render(points) {
-    chartEl.textContent = '';
-    var t = [], o1 = [], o2 = [], o3 = [];
-    for (var i = 0; i < points.length; i++) {
-      t.push(points[i].ts);
-      o1.push(points[i].off1);
-      o2.push(points[i].off2);
-      o3.push(points[i].off3);
+  function firstValid(arr) {
+    for (var i = 0; i < arr.length; i++) {
+      if (arr[i] !== null && arr[i] !== undefined) return arr[i];
     }
+    return null;
+  }
 
-    if (t.length === 0) {
-      chartEl.textContent = 'Нет данных за выбранный период';
+  // subtractBase вычитает базовую линию (первое валидное значение) из ряда:
+  // так на графике видна динамика поправок, а не их абсолютная база (~4e6 м).
+  function subtractBase(arr) {
+    var base = firstValid(arr);
+    if (base === null) return arr;
+    return arr.map(function (v) { return v === null || v === undefined ? null : v - base; });
+  }
+
+  function render(points) {
+    if (typeof uPlot === 'undefined') {
+      chartEl.textContent = 'Библиотека графиков не загрузилась (uplot.iife.min.js)';
       statsEl.textContent = '';
       plot = null;
       return;
     }
 
-    var opts = {
-      height: 420,
-      scales: { x: { time: true } },
-      series: [
-        {},
-        { label: 'off1 (м)', stroke: COLORS[0], width: 1.4 },
-        { label: 'off2 (м)', stroke: COLORS[1], width: 1.4 },
-        { label: 'off3 (м)', stroke: COLORS[2], width: 1.4 }
-      ],
-      axes: [
-        {},
-        { label: 'метры', size: 70 }
-      ],
-      legend: { show: true },
-      cursor: { drag: { x: true, y: false } }
-    };
+    var t = [], raw = [[], [], []];
+    for (var i = 0; i < points.length; i++) {
+      t.push(points[i].utc);
+      raw[0].push(points[i].iekf_hw_offset_1);
+      raw[1].push(points[i].iekf_hw_offset_2);
+      raw[2].push(points[i].iekf_hw_offset_3);
+    }
 
-    var data = [t, o1, o2, o3];
+    if (t.length === 0) {
+      if (plot) {
+        plot.destroy();
+        plot = null;
+      }
+      chartEl.textContent = 'Нет данных за выбранный период';
+      statsEl.textContent = '';
+      return;
+    }
+
+    var delta = deltaChk.checked;
+    var o1 = raw[0], o2 = raw[1], o3 = raw[2];
+    if (delta) {
+      o1 = subtractBase(o1);
+      o2 = subtractBase(o2);
+      o3 = subtractBase(o3);
+    }
+
     if (plot) {
-      plot.setData(data);
+      // График уже создан: только обновляем данные, не трогая его DOM
+      // (пересоздание контейнера скрывает canvas).
+      plot.setData([t, o1, o2, o3]);
     } else {
-      plot = new uPlot(opts, data, chartEl);
+      chartEl.textContent = '';
+      // uPlot 1.6 не подбирает ширину из контейнера: без явного width
+      // размер становится NaN и canvas невидим. Берём ширину контейнера.
+      var w = chartEl.clientWidth;
+      if (!w || w < 10) w = 800; // страховка на случай нулевой ширины при инициализации
+      plot = new uPlot({
+        width: w,
+        height: 420,
+        scales: { x: { time: true } },
+        series: [
+          {},
+          { label: NAMES[0], stroke: COLORS[0], width: 1.4 },
+          { label: NAMES[1], stroke: COLORS[1], width: 1.4 },
+          { label: NAMES[2], stroke: COLORS[2], width: 1.4 }
+        ],
+        axes: [
+          {},
+          { label: delta ? 'Δ, метры' : 'метры', size: 70 }
+        ],
+        legend: { show: false }, // своя легенда над графиком (не сдвигает canvas)
+        cursor: { drag: { x: true, y: false } }
+      }, [t, o1, o2, o3], chartEl);
       window.addEventListener('resize', function () {
         if (plot) plot.setSize({ width: chartEl.clientWidth, height: 420 });
       });
     }
 
-    var last = points[points.length - 1];
+    // Синхронизируем видимость серий с чекбоксами.
+    for (var s = 0; s < 3; s++) {
+      plot.setSeries(s + 1, { show: legendChks[s].checked });
+    }
+
+    var n = t.length;
+    var prefix = delta ? 'Δ' : '';
     statsEl.textContent =
-      'Последняя точка: off1=' + fmt(last.off1) + ' м · off2=' + fmt(last.off2) + ' м · off3=' + fmt(last.off3) +
-      ' м · valid=0b' + (last.validity >>> 0).toString(2).padStart(8, '0') +
-      ' · всего точек: ' + points.length;
+      'Последняя точка: ' + prefix + NAMES[0] + '=' + fmt(o1[n - 1]) + ' м · ' + prefix + NAMES[1] + '=' + fmt(o2[n - 1]) + ' м · ' + prefix + NAMES[2] + '=' + fmt(o3[n - 1]) +
+      ' м · всего точек: ' + n;
   }
 
   async function refresh() {
@@ -123,8 +190,28 @@
   }
 
   refreshBtn.addEventListener('click', refresh);
-  deviceSel.addEventListener('change', refresh);
+  deviceSel.addEventListener('change', function () {
+    sessionStorage.setItem('chartsDevice', deviceSel.value);
+    refresh();
+  });
   rangeSel.addEventListener('change', refresh);
+
+  // Переключение режима Δ: пересоздаём график (меняется подпись оси).
+  deltaChk.addEventListener('change', function () {
+    if (plot) {
+      plot.destroy();
+      plot = null;
+    }
+    refresh();
+  });
+
+  for (var i = 0; i < legendChks.length; i++) {
+    (function (idx) {
+      legendChks[idx].addEventListener('change', function () {
+        if (plot) plot.setSeries(idx + 1, { show: this.checked });
+      });
+    })(i);
+  }
 
   function applyAuto() {
     if (autoChk.checked) {

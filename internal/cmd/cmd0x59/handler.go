@@ -57,9 +57,10 @@ func Decode(data []byte) (Msg, error) {
 	return m, nil
 }
 
-// FormatLog форматирует строку человекочитаемого лога (docs/logging.md §6):
+// FormatLog форматирует строку человекочитаемого лога (docs/logging.md §6).
+// Имена полей — строго как в протоколе (docs/auth/protocol/cmd0x59.md):
 //
-//	2026-09-16 12:34:56.789  N-10  0x59  msg=12345  utc=…  off1=+12.345000 …
+//	2026-09-16 12:34:56.789  N-10  0x59  Номер_сообщения=12345  UTC=…  iekf_hw_offset_1=+12.345000 …
 //
 // t — момент приёма сообщения сервером; невалидные слоты (бит валидности
 // сброшен) помечаются суффиксом (invalid).
@@ -73,7 +74,7 @@ func (m Msg) FormatLog(t time.Time, did string) string {
 		return s
 	}
 	return fmt.Sprintf(
-		"%s  %s  0x59  msg=%d  utc=%s  off1=%s  off2=%s  off3=%s  static=%d  valid=0b%08b",
+		"%s  %s  0x59  Номер_сообщения=%d  UTC=%s  iekf_hw_offset_1=%s  iekf_hw_offset_2=%s  iekf_hw_offset_3=%s  static_cnt=%d  validity=0b%08b",
 		t.UTC().Format("2006-01-02 15:04:05.000"), did, m.Number, utc,
 		off(m.Off1, 1<<0), off(m.Off2, 1<<1), off(m.Off3, 1<<2),
 		m.Static, m.Validity&0xFF)
