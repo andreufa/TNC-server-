@@ -25,12 +25,13 @@ const (
 // (null в JSON — разрыв на графике), если значение отсутствует: NaN/±Inf
 // в кадре или все сэмплы корзины невалидны.
 type Point struct {
-	Ts       int64    `json:"utc"`              // время сообщения, Unix-миллисекунды (UTC из кадра)
-	Off1     *float64 `json:"iekf_hw_offset_1"` // метры
-	Off2     *float64 `json:"iekf_hw_offset_2"` // метры
-	Off3     *float64 `json:"iekf_hw_offset_3"` // метры
-	Validity uint32   `json:"validity"`         // битовая маска (для агрегата — побитовое И)
-	N        int      `json:"n"`                // исходных сэмплов в точке (1 — сырая)
+	Ts         int64    `json:"utc"`              // время сообщения, Unix-миллисекунды (UTC из кадра)
+	ReceivedAt int64    `json:"received_at"`      // момент приёма сервером, Unix-миллисекунды
+	Off1       *float64 `json:"iekf_hw_offset_1"` // метры
+	Off2       *float64 `json:"iekf_hw_offset_2"` // метры
+	Off3       *float64 `json:"iekf_hw_offset_3"` // метры
+	Validity   uint32   `json:"validity"`         // битовая маска (для агрегата — побитовое И)
+	N          int      `json:"n"`                // исходных сэмплов в точке (1 — сырая)
 }
 
 // MeasurementStore пишет измерения в таблицу measurements асинхронно (канал +
@@ -162,15 +163,15 @@ func (s *MeasurementStore) cleanup() {
 	}
 }
 
-// QueryRange возвращает точки измерений устройства за интервал [from, to],
-// прореженные до maxPoints (усреднение по корзинам). Порядок — по времени
-// возрастания.
+// QueryRange возвращает точки измерений устройства за интервал [from, to]
+// по времени приёма сервером (received_at), прореженные до maxPoints
+// (усреднение по корзинам). Порядок — по времени приёма возрастания.
 func (s *MeasurementStore) QueryRange(ctx context.Context, deviceID string, from, to time.Time, maxPoints int) ([]Point, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT ts, off1, off2, off3, validity
+		SELECT ts, received_at, off1, off2, off3, validity
 		FROM measurements
-		WHERE device_id = $1 AND ts >= $2 AND ts <= $3
-		ORDER BY ts ASC`,
+		WHERE device_id = $1 AND received_at >= $2 AND received_at <= $3
+		ORDER BY received_at ASC`,
 		deviceID, from, to)
 	if err != nil {
 		return nil, err
@@ -179,23 +180,24 @@ func (s *MeasurementStore) QueryRange(ctx context.Context, deviceID string, from
 
 	var raw []rawPoint
 	for rows.Next() {
-		var ts time.Time
+		var ts, receivedAt time.Time
 		var o1, o2, o3 float64
 		var validity int64
-		if err := rows.Scan(&ts, &o1, &o2, &o3, &validity); err != nil {
+		if err := rows.Scan(&ts, &receivedAt, &o1, &o2, &o3, &validity); err != nil {
 			return nil, err
 		}
-		raw = append(raw, applyValidity(rawPoint{ts: ts, off1: o1, off2: o2, off3: o3, validity: uint32(validity)}))
+		raw = append(raw, applyValidity(rawPoint{ts: ts, receivedAt: receivedAt, off1: o1, off2: o2, off3: o3, validity: uint32(validity)}))
 	}
 	return downsample(raw, maxPoints), rows.Err()
 }
 
 type rawPoint struct {
-	ts       time.Time
-	off1     float64
-	off2     float64
-	off3     float64
-	validity uint32
+	ts         time.Time
+	receivedAt time.Time
+	off1       float64
+	off2       float64
+	off3       float64
+	validity   uint32
 }
 
 // applyValidity зануляет невалидные слоты (NaN): бит 0 (1<<0) — валиден
@@ -235,7 +237,7 @@ func downsample(raw []rawPoint, maxPoints int) []Point {
 			end = len(raw)
 		}
 		b := raw[i:end]
-		p := Point{Ts: b[0].ts.UnixMilli(), N: len(b), Validity: ^uint32(0)}
+		p := Point{Ts: b[0].ts.UnixMilli(), ReceivedAt: b[0].receivedAt.UnixMilli(), N: len(b), Validity: ^uint32(0)}
 		p.Off1 = avgOff(b, 1)
 		p.Off2 = avgOff(b, 2)
 		p.Off3 = avgOff(b, 3)
@@ -251,12 +253,13 @@ func rawToPoints(raw []rawPoint) []Point {
 	out := make([]Point, len(raw))
 	for i, r := range raw {
 		out[i] = Point{
-			Ts:       r.ts.UnixMilli(),
-			Off1:     f2p(r.off1),
-			Off2:     f2p(r.off2),
-			Off3:     f2p(r.off3),
-			Validity: r.validity,
-			N:        1,
+			Ts:         r.ts.UnixMilli(),
+			ReceivedAt: r.receivedAt.UnixMilli(),
+			Off1:       f2p(r.off1),
+			Off2:       f2p(r.off2),
+			Off3:       f2p(r.off3),
+			Validity:   r.validity,
+			N:          1,
 		}
 	}
 	return out

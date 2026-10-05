@@ -24,7 +24,10 @@
     <button id="refreshBtn" class="primary" type="button">Обновить</button>
     <label class="chk"><input type="checkbox" id="autoChk" checked> автообновление (5 с)</label>
     <label class="chk" title="Отклонение от первой точки выбранного диапазона — видна динамика поправок">
-      <input type="checkbox" id="deltaChk" checked> Δ от начала диапазона
+      <input type="checkbox" id="deltaChk"> Δ от начала диапазона
+    </label>
+    <label class="chk" title="Ось X — момент приёма сообщения сервером; без галочки — время из кадра устройства">
+      <input type="checkbox" id="rxChk" checked> ось: время приёма
     </label>
     <span id="status" style="color:#666;"></span>
   </div>
@@ -53,11 +56,15 @@
   var NAMES = ['iekf_hw_offset_1', 'iekf_hw_offset_2', 'iekf_hw_offset_3'];
   var plot = null;
   var timer = null;
+  // Текущие данные рендера — тултип курсора читает их, чтобы не замыкать
+  // устаревший набор точек между автообновлениями.
+  var cur = { t: [], o: [[], [], []], points: [] };
 
   var deviceSel = document.getElementById('deviceSel');
   var rangeSel = document.getElementById('rangeSel');
   var autoChk = document.getElementById('autoChk');
   var deltaChk = document.getElementById('deltaChk');
+  var rxChk = document.getElementById('rxChk');
   var refreshBtn = document.getElementById('refreshBtn');
   var statusEl = document.getElementById('status');
   var statsEl = document.getElementById('stats');
@@ -76,6 +83,8 @@
     sessionStorage.setItem('chartsDevice', selected);
   }
 
+  function pad2(n) { return (n < 10 ? '0' : '') + n; }
+
   function fmt(v) {
     if (v === null || v === undefined) return '—';
     return Number(v).toFixed(6);
@@ -86,6 +95,27 @@
       if (arr[i] !== null && arr[i] !== undefined) return arr[i];
     }
     return null;
+  }
+
+  // Всплывающая подсказка при наведении: точное время, момент приёма,
+  // значения слотов (невалидные помечаются).
+  function cursorTooltip(u, seriesIdx, idx0, idx1) {
+    if (idx0 === null || idx0 === undefined) return null;
+    var p = cur.points[idx0];
+    if (!p) return null;
+    var d = new Date(cur.t[idx0] * 1000);
+    var rx = new Date(p.received_at);
+    var html = '<b>' + d.toLocaleString('ru-RU') + '</b>';
+    html += '<br>получено: ' + rx.toLocaleTimeString('ru-RU') +
+      ' · ' + Math.max(0, Math.round((Date.now() - p.received_at) / 1000)) + ' с назад';
+    for (var s = 0; s < 3; s++) {
+      if (!legendChks[s].checked) continue;
+      var v = cur.o[s][idx0];
+      var valid = (p.validity & (1 << s)) !== 0;
+      html += '<br><span style="color:' + COLORS[s] + '">' + NAMES[s] + '</span>: ' +
+        (valid ? fmt(v) + ' м' : '— (invalid)');
+    }
+    return html;
   }
 
   // subtractBase вычитает базовую линию (первое валидное значение) из ряда:
@@ -104,9 +134,11 @@
       return;
     }
 
+    var useRx = rxChk.checked;
     var t = [], raw = [[], [], []];
     for (var i = 0; i < points.length; i++) {
-      t.push(points[i].utc);
+      // uPlot ожидает Unix-секунды; в JSON время — миллисекунды.
+      t.push((useRx ? points[i].received_at : points[i].utc) / 1000);
       raw[0].push(points[i].iekf_hw_offset_1);
       raw[1].push(points[i].iekf_hw_offset_2);
       raw[2].push(points[i].iekf_hw_offset_3);
@@ -129,6 +161,9 @@
       o2 = subtractBase(o2);
       o3 = subtractBase(o3);
     }
+    cur.t = t;
+    cur.o = [o1, o2, o3];
+    cur.points = points;
 
     if (plot) {
       // График уже создан: только обновляем данные, не трогая его DOM
@@ -140,6 +175,17 @@
       // размер становится NaN и canvas невидим. Берём ширину контейнера.
       var w = chartEl.clientWidth;
       if (!w || w < 10) w = 800; // страховка на случай нулевой ширины при инициализации
+      // Подписи делений: время суток для коротких диапазонов, дата+время — для длинных.
+      var tickVals = function (u, splits) {
+        var span = u.scales.x.max - u.scales.x.min;
+        return splits.map(function (v) {
+          var d = new Date(v * 1000);
+          var hm = pad2(d.getHours()) + ':' + pad2(d.getMinutes());
+          return span > 86400
+            ? pad2(d.getDate()) + '.' + pad2(d.getMonth() + 1) + ' ' + hm
+            : hm + ':' + pad2(d.getSeconds());
+        });
+      };
       plot = new uPlot({
         width: w,
         height: 420,
@@ -151,11 +197,14 @@
           { label: NAMES[2], stroke: COLORS[2], width: 1.4 }
         ],
         axes: [
-          {},
+          { label: useRx ? 'время приёма (местное)' : 'время устройства', size: 42, values: tickVals },
           { label: delta ? 'Δ, метры' : 'метры', size: 70 }
         ],
         legend: { show: false }, // своя легенда над графиком (не сдвигает canvas)
-        cursor: { drag: { x: true, y: false } }
+        cursor: {
+          drag: { x: true, y: false },
+          points: { show: cursorTooltip }
+        }
       }, [t, o1, o2, o3], chartEl);
       window.addEventListener('resize', function () {
         if (plot) plot.setSize({ width: chartEl.clientWidth, height: 420 });
@@ -169,8 +218,11 @@
 
     var n = t.length;
     var prefix = delta ? 'Δ' : '';
+    var d0 = new Date(t[0] * 1000);
+    var d1 = new Date(t[n - 1] * 1000);
     statsEl.textContent =
-      'Последняя точка: ' + prefix + NAMES[0] + '=' + fmt(o1[n - 1]) + ' м · ' + prefix + NAMES[1] + '=' + fmt(o2[n - 1]) + ' м · ' + prefix + NAMES[2] + '=' + fmt(o3[n - 1]) +
+      'Первая точка: ' + d0.toLocaleString('ru-RU') + ' · Последняя: ' + d1.toLocaleString('ru-RU') +
+      ' · Последние значения: ' + prefix + NAMES[0] + '=' + fmt(o1[n - 1]) + ' м · ' + prefix + NAMES[1] + '=' + fmt(o2[n - 1]) + ' м · ' + prefix + NAMES[2] + '=' + fmt(o3[n - 1]) +
       ' м · всего точек: ' + n;
   }
 
@@ -198,6 +250,15 @@
 
   // Переключение режима Δ: пересоздаём график (меняется подпись оси).
   deltaChk.addEventListener('change', function () {
+    if (plot) {
+      plot.destroy();
+      plot = null;
+    }
+    refresh();
+  });
+  // Переключение оси X (время приёма / время устройства): пересоздаём график,
+  // так как меняются данные оси и её подпись.
+  rxChk.addEventListener('change', function () {
     if (plot) {
       plot.destroy();
       plot = null;

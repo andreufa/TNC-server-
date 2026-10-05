@@ -7,7 +7,8 @@ import (
 )
 
 func raw(ms int64, o1, o2, o3 float64, v uint32) rawPoint {
-	return rawPoint{ts: time.UnixMilli(ms), off1: o1, off2: o2, off3: o3, validity: v}
+	// Имитация приёма сервером через 5 с после времени устройства.
+	return rawPoint{ts: time.UnixMilli(ms), receivedAt: time.UnixMilli(ms + 5000), off1: o1, off2: o2, off3: o3, validity: v}
 }
 
 func TestDownsampleIdentity(t *testing.T) {
@@ -21,6 +22,9 @@ func TestDownsampleIdentity(t *testing.T) {
 	}
 	if pts[0].Ts != 1000 || *pts[0].Off1 != 1 || pts[0].N != 1 {
 		t.Errorf("point 0 = %+v", pts[0])
+	}
+	if pts[0].ReceivedAt != 6000 {
+		t.Errorf("point 0 ReceivedAt = %d, want 6000", pts[0].ReceivedAt)
 	}
 	if pts[1].Validity != 0b101 {
 		t.Errorf("point 1 validity = %b, want 0b101", pts[1].Validity)
@@ -64,6 +68,9 @@ func TestDownsampleBuckets(t *testing.T) {
 	}
 	if pts[0].Ts != 1000 || pts[0].N != 3 {
 		t.Errorf("bucket1 ts/n = %d/%d, want 1000/3", pts[0].Ts, pts[0].N)
+	}
+	if pts[0].ReceivedAt != 6000 {
+		t.Errorf("bucket1 ReceivedAt = %d, want 6000", pts[0].ReceivedAt)
 	}
 	if pts[0].Validity != 0b011 {
 		t.Errorf("bucket1 validity = %b, want 0b011", pts[0].Validity)

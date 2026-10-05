@@ -189,15 +189,6 @@
 
     window.onload = function() {
         connectWebSocket();
-
-        container.addEventListener('scroll', function() {
-            const isAtBottom = container.scrollHeight - container.scrollTop <= container.clientHeight + 50;
-            if (isAtBottom && !autoScroll) {
-                autoScroll = true;
-                const btn = document.querySelector('button[onclick="toggleAutoScroll()"]');
-                btn.textContent = 'Автоскролл: включен';
-            }
-        });
     };
 </script>
 

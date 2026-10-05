@@ -469,3 +469,5 @@ feat: device file logs + 0x59 measurements charts
 - config: LOG_DIR, LOG_RETENTION_DAYS, LOG_MAX_FILE_MB, MEASUREMENT_RETENTION_DAYS
 
 Замечание по коммиту: в рабочем дереве, помимо моих изменений, лежат ваши незакоммиченные правки Dockerfile (порты 8181/6407, Go 1.27) и docker-compose.yml (сеть, порты). Если хотите держать их отдельно от фич логирования/графиков — лучше закоммитить их первым отдельным коммитом (например, switch to ports 8181/6407 and docker network), а затем уже этот. Могу применить изменения в compose/.env или подготовить коммиты — скажите.
+
+
