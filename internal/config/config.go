@@ -5,6 +5,8 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
+	"time"
 )
 
 // Config holds all runtime configuration for the server.
@@ -28,6 +30,10 @@ type Config struct {
 	LogMaxFileMB     int64
 
 	MeasurementRetentionDays int
+
+	NTPServers      []string
+	NTPSyncInterval time.Duration
+	NTPTimeout      time.Duration
 }
 
 func Load() (*Config, error) {
@@ -50,6 +56,11 @@ func Load() (*Config, error) {
 		LogMaxFileMB:     getenvInt64("LOG_MAX_FILE_MB", 100),
 
 		MeasurementRetentionDays: getenvInt("MEASUREMENT_RETENTION_DAYS", 7),
+
+		NTPServers: splitList(getenv("NTP_SERVERS",
+			"ntp1.vniiftri.ru,ntp2.vniiftri.ru,ntp3.vniiftri.ru,ntp4.vniiftri.ru,ntp21.vniiftri.ru")),
+		NTPSyncInterval: time.Duration(getenvInt("NTP_SYNC_INTERVAL_SECONDS", 60)) * time.Second,
+		NTPTimeout:      time.Duration(getenvInt("NTP_TIMEOUT_SECONDS", 3)) * time.Second,
 	}
 
 	return cfg, nil
@@ -92,4 +103,15 @@ func getenvInt64(key string, def int64) int64 {
 		}
 	}
 	return def
+}
+
+// splitList разбивает строку через запятую, обрезая пробелы и пустые элементы.
+func splitList(s string) []string {
+	var out []string
+	for _, part := range strings.Split(s, ",") {
+		if p := strings.TrimSpace(part); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }

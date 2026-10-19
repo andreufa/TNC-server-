@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"tnc-server/internal/hub"
+	"tnc-server/internal/models"
+	"tnc-server/internal/ntp"
 	"tnc-server/internal/store"
 )
 
@@ -27,6 +29,8 @@ type CryptoServer struct {
 	logs         *FrameLogger
 	measurements *store.MeasurementStore
 	handlers     map[byte]HandlerFactory // cmd → factory (creates per-connection handler)
+	clock        *ntp.Clock
+	timeLogs     chan<- models.TimeLogEntry
 
 	ln   net.Listener
 	wg   sync.WaitGroup
@@ -36,7 +40,9 @@ type CryptoServer struct {
 // NewCryptoServer creates a new crypto TCP server with the given command handler factories.
 // logs — общий логгер файловых логов устройств (nil — отключено).
 // measurements — очередь хранения измерений 0x59 (nil — отключено).
-func NewCryptoServer(addr string, devices *store.DeviceStore, h *hub.Hub, logChan chan<- string, handlers map[byte]HandlerFactory, logs *FrameLogger, measurements *store.MeasurementStore) *CryptoServer {
+// clock — NTP-часы для ответов 0x67 (nil — системное время).
+// timeLogs — канал записей вкладки «Временная метка» (nil — отключено).
+func NewCryptoServer(addr string, devices *store.DeviceStore, h *hub.Hub, logChan chan<- string, handlers map[byte]HandlerFactory, logs *FrameLogger, measurements *store.MeasurementStore, clock *ntp.Clock, timeLogs chan<- models.TimeLogEntry) *CryptoServer {
 	return &CryptoServer{
 		addr:         addr,
 		devices:      devices,
@@ -45,6 +51,8 @@ func NewCryptoServer(addr string, devices *store.DeviceStore, h *hub.Hub, logCha
 		logs:         logs,
 		measurements: measurements,
 		handlers:     handlers,
+		clock:        clock,
+		timeLogs:     timeLogs,
 		quit:         make(chan struct{}),
 	}
 }
@@ -119,6 +127,8 @@ func (s *CryptoServer) handleConnection(conn net.Conn) {
 		LogChan:      s.logChan,
 		Logger:       s.logs,
 		Measurements: s.measurements,
+		Clock:        s.clock,
+		TimeLogs:     s.timeLogs,
 	}
 
 	// Файловые логи сессии закрываются при разрыве соединения.
@@ -151,6 +161,11 @@ func (s *CryptoServer) handleConnection(conn net.Conn) {
 			}
 			return
 		}
+
+		// Момент приёма и сырые байты кадра — используются ответом 0x67
+		// и вкладкой «Временная метка».
+		ctx.ReceivedAt = time.Now()
+		ctx.LastRaw = raw
 
 		// --- Connection-level frame logging (raw hex) ---
 		log.Printf("crypto-tcp: [%s] frame from %q: Addr=0x%02x Cmd=0x%02x data=%x crc=0x%02x",

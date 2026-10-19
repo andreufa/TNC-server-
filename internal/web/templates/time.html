@@ -1,0 +1,222 @@
+{{define "time.html"}}
+{{template "top" .}}
+
+<h1>Временная метка (0x66 / 0x67)</h1>
+
+<div class="card">
+  <div class="row">
+    <label>Устройство
+      <select id="deviceSel">
+        {{range .Devices}}<option value="{{.ID}}">{{.ID}}</option>{{end}}
+      </select>
+    </label>
+    <button id="clearBtn" type="button">Очистить</button>
+    <button id="autoBtn" type="button">Автоскролл: включен</button>
+    <span id="status" style="margin-left: 10px; color: #666;">Записей: 0</span>
+  </div>
+
+  <div id="timeContainer" style="
+        background: #1a202c;
+        color: #e2e8f0;
+        font-family: 'Courier New', monospace;
+        font-size: 13px;
+        padding: 16px;
+        height: 500px;
+        overflow-y: auto;
+        border-radius: 6px;
+        margin-top: 10px;
+    ">
+    <div style="color: #68d391; margin-bottom: 8px; font-weight: bold;">
+      === Временная метка (0x66 / 0x67) — в реальном времени ===
+    </div>
+    <div id="emptyHint" style="color: #718096;">Ожидание сообщений 0x66 от устройства…</div>
+  </div>
+</div>
+
+{{if not .Devices}}
+<p>Нет зарегистрированных устройств — логи времени недоступны.</p>
+{{end}}
+
+<style>
+  /* Цветовая гамма — как на вкладке «Логи» (logs.html). */
+  .time-entry {
+    padding: 6px 0;
+    border-bottom: 1px solid #2d3748;
+  }
+
+  /* Первая строка - метаданные */
+  .time-meta-line {
+    margin-bottom: 4px;
+  }
+
+  .time-ts {
+    color: #718096;
+    margin-right: 10px;
+  }
+
+  .time-dir {
+    display: inline-block;
+    padding: 0 8px;
+    border-radius: 3px;
+    font-weight: bold;
+    margin-right: 10px;
+    font-size: 11px;
+  }
+
+  .time-dir-rx { background: #2f855a; color: #fff; }
+  .time-dir-tx { background: #2b6cb0; color: #fff; }
+
+  .time-device {
+    color: #f6ad55;
+  }
+
+  /* Вторая строка - кадр в hex и значения времени */
+  .time-msg {
+    color: #e2e8f0;
+    word-wrap: break-word;
+    white-space: pre-wrap; /* Сохраняет перенос между hex и значениями */
+    line-height: 1.4;
+    padding-left: 28px; /* Небольшой отступ, чтобы текст не прилипал к левому краю */
+    margin: 0;
+  }
+</style>
+
+<script>
+(function () {
+  var deviceSel = document.getElementById('deviceSel');
+  if (!deviceSel || deviceSel.options.length === 0) return;
+
+  // Запоминаем выбор устройства в sessionStorage, как на вкладке «Поправки»:
+  // переключение на другие вкладки и обратно не сбрасывает выбор.
+  var saved = sessionStorage.getItem('timeDevice');
+  var qs = new URLSearchParams(location.search).get('device');
+  var selected = saved || qs;
+  if (selected) {
+    deviceSel.value = selected;
+    sessionStorage.setItem('timeDevice', selected);
+  }
+
+  var container = document.getElementById('timeContainer');
+  var statusEl = document.getElementById('status');
+  var autoBtn = document.getElementById('autoBtn');
+  var emptyHint = document.getElementById('emptyHint');
+  var ws = null;
+  var count = 0;
+  var maxRows = 500;
+  var autoScroll = true;
+
+  function pad2(n) { return (n < 10 ? '0' : '') + n; }
+  function pad3(n) { return (n < 100 ? (n < 10 ? '00' : '0') : '') + n; }
+
+  // Unix-мс → «дд.мм.гггг чч:мм:сс.ммм»
+  function fmtMs(ms) {
+    if (!ms) return '—';
+    var d = new Date(ms);
+    return pad2(d.getDate()) + '.' + pad2(d.getMonth() + 1) + '.' + d.getFullYear() + ' ' +
+      pad2(d.getHours()) + ':' + pad2(d.getMinutes()) + ':' + pad2(d.getSeconds()) + '.' + pad3(d.getMilliseconds());
+  }
+
+  function addEntry(e) {
+    if (emptyHint) { emptyHint.remove(); emptyHint = null; }
+    var isTx = e.dir === 'tx';
+
+    var entry = document.createElement('div');
+    entry.className = 'time-entry';
+
+    // Первая строка (метаданные): время, направление, устройство.
+    var meta = document.createElement('div');
+    meta.className = 'time-meta-line';
+
+    var ts = document.createElement('span');
+    ts.className = 'time-ts';
+    ts.textContent = '[' + fmtMs(e.at) + ']';
+
+    var dir = document.createElement('span');
+    dir.className = 'time-dir ' + (isTx ? 'time-dir-tx' : 'time-dir-rx');
+    dir.textContent = isTx ? 'ОТВЕТ' : 'ПРИЁМ';
+
+    var dev = document.createElement('span');
+    dev.className = 'time-device';
+    dev.textContent = e.device_id || '—';
+
+    meta.appendChild(ts);
+    meta.appendChild(dir);
+    meta.appendChild(dev);
+
+    // Вторая строка (сообщение): полный кадр в hex + значения времени.
+    var fields = [];
+    if (isTx) {
+      fields.push('сервер: ' + fmtMs(e.server_time_ms) + ' (' + (e.server_time_ms || '—') + ' мс)');
+    } else {
+      fields.push('устройство: ' + fmtMs(e.device_time_ms) + ' (' + (e.device_time_ms || '—') + ' мс)');
+    }
+    fields.push('приём: ' + fmtMs(e.received_at_ms) + ' (' + (e.received_at_ms || '—') + ' мс)');
+
+    var msg = document.createElement('div');
+    msg.className = 'time-msg';
+    msg.textContent = (e.frame_hex || '') + '\n' + fields.join(' · ');
+
+    entry.appendChild(meta);
+    entry.appendChild(msg);
+    container.appendChild(entry);
+
+    count++;
+    statusEl.textContent = 'Записей: ' + count;
+
+    while (container.querySelectorAll('.time-entry').length > maxRows) {
+      var first = container.querySelector('.time-entry');
+      if (first) container.removeChild(first);
+    }
+    if (autoScroll) container.scrollTop = container.scrollHeight;
+  }
+
+  function connect() {
+    if (ws) {
+      ws.onclose = null;
+      ws.close();
+      ws = null;
+    }
+    var proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    ws = new WebSocket(proto + '//' + window.location.host +
+      '/time/ws?device=' + encodeURIComponent(deviceSel.value));
+    ws.onmessage = function (ev) {
+      var e;
+      try { e = JSON.parse(ev.data); } catch (err) { return; }
+      addEntry(e);
+    };
+    ws.onclose = function () {
+      ws = null;
+      setTimeout(connect, 3000); // авто-переподключение
+    };
+  }
+
+  document.getElementById('clearBtn').addEventListener('click', function () {
+    container.querySelectorAll('.time-entry').forEach(function (n) { n.remove(); });
+    count = 0;
+    statusEl.textContent = 'Записей: 0';
+    emptyHint = document.createElement('div');
+    emptyHint.id = 'emptyHint';
+    emptyHint.style.color = '#718096';
+    emptyHint.textContent = 'Ожидание сообщений 0x66 от устройства…';
+    container.appendChild(emptyHint);
+  });
+
+  document.getElementById('autoBtn').addEventListener('click', function () {
+    autoScroll = !autoScroll;
+    autoBtn.textContent = 'Автоскролл: ' + (autoScroll ? 'включен' : 'выключен');
+  });
+
+  deviceSel.addEventListener('change', function () {
+    sessionStorage.setItem('timeDevice', deviceSel.value);
+    container.querySelectorAll('.time-entry').forEach(function (n) { n.remove(); });
+    count = 0;
+    statusEl.textContent = 'Записей: 0';
+    connect();
+  });
+
+  connect();
+})();
+</script>
+
+{{template "bottom" .}}
+{{end}}

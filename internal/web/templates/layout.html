@@ -153,6 +153,7 @@
     <a href="/">Устройства</a>
     <a href="/logs">Логи</a>
     <a href="/charts">Поправки</a>
+    <a href="/time">Временная метка</a>
     {{if or (eq (printf "%s" .User.Role) "privileged") (eq (printf "%s" .User.Role) "admin")}}<a href="/devices/deleted">Удалённые</a>{{end}}
     {{if eq (printf "%s" .User.Role) "admin"}}<a href="/users">Пользователи</a>{{end}}
     <span class="spacer"></span>

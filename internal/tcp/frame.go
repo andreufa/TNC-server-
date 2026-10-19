@@ -26,8 +26,13 @@ const (
 	AddrChallengeResponse = 0x64 // Server → Device: challenge (timestamp + nonce)
 
 	// Address + Specifier constants for command 0x59 (regular messages).
-	AddrDeviceRegular  = 0x76 // Device → Server: regular data message
-	AddrBroadcast      = 0x70 // Server → Device: broadcast (modified addr)
+	AddrDeviceRegular = 0x76 // Device → Server: regular data message
+	AddrBroadcast     = 0x70 // Server → Device: broadcast (modified addr)
+
+	// Address + Specifier constants for command 0x65 time synchronization
+	// (regular keep-alive + clock sync, docs/protocol/cmd0x66.md).
+	AddrTimeRequest  = 0x66 // Device → Server: регулярное сообщение поддержания соединения и синхронизации часов
+	AddrTimeResponse = 0x67 // Server → Device: ответ с временем сервера и временем приёма сообщения
 
 	// Command numbers.
 	CmdAuth    byte = 0x65
@@ -48,6 +53,10 @@ const (
 
 	// Fixed field sizes.
 	DeviceIDSize = 14 // Device ID is exactly 14 bytes
+
+	// Time sync (0x66/0x67) data sizes, bytes.
+	TimeDataLen         = 8  // 0x66: время устройства, uint64 little-endian, Unix-мс
+	TimeResponseDataLen = 16 // 0x67: время сервера (8) + время приёма (8), uint64 LE, Unix-мс
 
 	// Auth protocol version for command 0x65.
 	AuthProtocolVersion byte = 0x01

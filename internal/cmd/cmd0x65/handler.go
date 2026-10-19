@@ -55,6 +55,10 @@ func (h *Handler) Handle(fr tcp.Frame, conn net.Conn, ctx *tcp.CmdContext) (*tcp
 		return h.handleParamRequest(fr, conn, ctx)
 	case stepWaitAuth:
 		return h.handleAuth(fr, conn, ctx)
+	case stepDone:
+		// После авторизации команда 0x65 несёт регулярные сообщения 0x66
+		// (поддержание соединения и синхронизация часов).
+		return h.handleHeartbeat(fr, conn, ctx)
 	default:
 		return nil, fmt.Errorf("cmd0x65: unexpected frame in step %d", h.step)
 	}

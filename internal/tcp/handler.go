@@ -2,8 +2,11 @@ package tcp
 
 import (
 	"net"
+	"time"
 
 	"tnc-server/internal/hub"
+	"tnc-server/internal/models"
+	"tnc-server/internal/ntp"
 	"tnc-server/internal/store"
 )
 
@@ -20,6 +23,19 @@ type CmdContext struct {
 
 	// Measurements — очередь хранения измерений 0x59 для графиков (nil — отключено).
 	Measurements *store.MeasurementStore
+
+	// ReceivedAt — момент приёма текущего кадра (системное время).
+	// Выставляется в crypto_server сразу после чтения кадра.
+	ReceivedAt time.Time
+
+	// LastRaw — сырые байты последнего принятого кадра (для hex-логов).
+	LastRaw []byte
+
+	// Clock — NTP-дисциплинированные часы (nil — используется системное время).
+	Clock *ntp.Clock
+
+	// TimeLogs — канал записей вкладки «Временная метка» (nil — отключено).
+	TimeLogs chan<- models.TimeLogEntry
 }
 
 // CmdHandler processes an incoming frame for a specific command.

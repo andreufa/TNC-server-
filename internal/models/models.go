@@ -53,6 +53,17 @@ type Measurement struct {
 	Validity   uint32    // битовая маска: бит 0 → off1, бит 1 → off2, бит 2 → off3
 }
 
+// TimeLogEntry — одна строка лога вкладки «Временная метка»: приём 0x66 или отправка 0x67.
+type TimeLogEntry struct {
+	DeviceID     string `json:"device_id"`
+	Dir          string `json:"dir"`                      // "rx" — принято от устройства, "tx" — отправлено сервером
+	At           int64  `json:"at"`                       // системное время события, Unix-мс (для отображения строки)
+	FrameHex     string `json:"frame_hex"`                // полный кадр в hex
+	DeviceTimeMs int64  `json:"device_time_ms,omitempty"` // время устройства из данных 0x66, Unix-мс (только rx)
+	ServerTimeMs int64  `json:"server_time_ms,omitempty"` // NTP-время сервера, Unix-мс (только tx)
+	ReceivedAtMs int64  `json:"received_at_ms,omitempty"` // NTP-время приёма исходного 0x66, Unix-мс
+}
+
 // User is a web-form account.
 type User struct {
 	ID        uuid.UUID

@@ -18,30 +18,33 @@ var staticFS embed.FS
 
 // Server is the HTTP frontend (web form).
 type Server struct {
-	devices      *store.DeviceStore
-	users        *store.UserStore
-	sessions     *store.SessionStore
-	measurements *store.MeasurementStore
-	tmpl         *template.Template
-	logServer    *LogServer // добавляем
+	devices       *store.DeviceStore
+	users         *store.UserStore
+	sessions      *store.SessionStore
+	measurements  *store.MeasurementStore
+	tmpl          *template.Template
+	logServer     *LogServer // добавляем
+	timeLogServer *TimeLogServer
 }
 
 // NewServer builds the web server and parses templates.
-func NewServer(devices *store.DeviceStore, users *store.UserStore, sessions *store.SessionStore, logChan <-chan string, measurements *store.MeasurementStore) (*Server, error) {
+func NewServer(devices *store.DeviceStore, users *store.UserStore, sessions *store.SessionStore, logChan <-chan string, measurements *store.MeasurementStore, timeLogs <-chan models.TimeLogEntry) (*Server, error) {
 	tmpl, err := template.ParseFS(templatesFS, "templates/*.html")
 	if err != nil {
 		return nil, err
 	}
 
 	logServer := NewLogServer(logChan)
+	timeLogServer := NewTimeLogServer(timeLogs)
 
 	return &Server{
-		devices:      devices,
-		users:        users,
-		sessions:     sessions,
-		measurements: measurements,
-		tmpl:         tmpl,
-		logServer:    logServer,
+		devices:       devices,
+		users:         users,
+		sessions:      sessions,
+		measurements:  measurements,
+		tmpl:          tmpl,
+		logServer:     logServer,
+		timeLogServer: timeLogServer,
 	}, nil
 }
 
@@ -66,6 +69,10 @@ func (s *Server) Handler() http.Handler {
 	// Графики измерений 0x59 (доступны всем авторизованным)
 	mux.HandleFunc("GET /charts", requireAuth(s.handleChartsPage))                // страница графиков
 	mux.HandleFunc("GET /api/measurements", requireAuth(s.handleMeasurementsAPI)) // данные для графиков
+
+	// Вкладка «Временная метка»: логи синхронизации 0x66/0x67 (доступны всем авторизованным)
+	mux.HandleFunc("GET /time", requireAuth(s.handleTimePage))
+	mux.HandleFunc("GET /time/ws", requireAuth(s.handleTimeWS))
 
 	// --- Привилегированные (и админ тоже) ---
 	// Используем requireRoleOrAdmin: доступ, если role == privileged ИЛИ IsAdmin() == true

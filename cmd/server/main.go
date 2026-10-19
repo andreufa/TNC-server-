@@ -21,6 +21,8 @@ import (
 
 	"tnc-server/internal/health"
 	"tnc-server/internal/hub"
+	"tnc-server/internal/models"
+	"tnc-server/internal/ntp"
 	"tnc-server/internal/store"
 	"tnc-server/internal/tcp"
 	"tnc-server/internal/web"
@@ -81,6 +83,14 @@ func run() error {
 	// --- log channel ---
 	logChan := make(chan string, 1000)
 
+	// --- NTP-дисциплинированные часы (ответ 0x67, вкладка «Временная метка») ---
+	clock := ntp.NewClock(cfg.NTPServers, cfg.NTPSyncInterval, cfg.NTPTimeout)
+	clock.Start()
+	defer clock.Stop()
+
+	// --- канал логов вкладки «Временная метка» (hex кадров 0x66/0x67) ---
+	timeLogs := make(chan models.TimeLogEntry, 1024)
+
 	// --- файловые логи устройств (docs/logging.md) ---
 	frameLogs := tcp.NewFrameLogger(cfg.LogDir, cfg.LogMaxFileMB<<20)
 	if n, err := tcp.CleanupOldLogs(cfg.LogDir, cfg.LogRetentionDays); err != nil {
@@ -114,12 +124,12 @@ func run() error {
 	// Registry is populated by init() in each command package (see blank imports above).
 	// GetAll() returns a snapshot of the full registry for the server constructor.
 	handlers := cmd.GetAll()
-	cryptoSrv := tcp.NewCryptoServer(cfg.CryptoTCPAddr, devices, h, logChan, handlers, frameLogs, measurements)
+	cryptoSrv := tcp.NewCryptoServer(cfg.CryptoTCPAddr, devices, h, logChan, handlers, frameLogs, measurements, clock, timeLogs)
 	cryptoErr := make(chan error, 1)
 	go func() { cryptoErr <- cryptoSrv.ListenAndServe() }()
 
 	// --- HTTP server ---
-	webSrv, err := web.NewServer(devices, users, sessions, logChan, measurements)
+	webSrv, err := web.NewServer(devices, users, sessions, logChan, measurements, timeLogs)
 	if err != nil {
 		return err
 	}
@@ -161,6 +171,7 @@ func run() error {
 	cryptoSrv.Shutdown()
 	frameLogs.CloseAll()
 	close(logChan)
+	close(timeLogs)
 
 	log.Print("shutdown: complete")
 	return nil

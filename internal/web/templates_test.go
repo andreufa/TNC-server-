@@ -51,4 +51,17 @@ func TestTemplatesParseAndRender(t *testing.T) {
 	if !bytes.Contains(buf.Bytes(), []byte("Нет зарегистрированных устройств")) {
 		t.Error("charts.html без устройств должен показывать сообщение")
 	}
+
+	// Вкладка «Временная метка» рендерится со списком устройств.
+	buf.Reset()
+	if err := tmpl.ExecuteTemplate(&buf, "time.html", map[string]any{
+		"User":     user,
+		"Devices":  devices,
+		"Selected": "N-10",
+	}); err != nil {
+		t.Fatalf("execute time.html: %v", err)
+	}
+	if !bytes.Contains(buf.Bytes(), []byte("/time/ws")) {
+		t.Error("time.html не подключает WebSocket вкладки «Временная метка»")
+	}
 }
